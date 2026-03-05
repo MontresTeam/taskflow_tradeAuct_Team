@@ -1,7 +1,13 @@
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useEffect, useState } from 'react';
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { issuesApi, boardsApi, sprintsApi, projectsApi } from '../lib/api';
+import MetricCard from '../components/MetricCard';
+import SectionCard from '../components/SectionCard';
+
+const DEFAULT_STATUSES = ['Backlog', 'Todo', 'In Progress', 'Done'];
+const STATUS_COLORS: string[] = ['#4f46e5', '#06b6d4', '#22c55e', '#f97316', '#e11d48', '#8b5cf6'];
 
 export default function ProjectDashboard() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -11,10 +17,14 @@ export default function ProjectDashboard() {
     boards: 0,
     sprints: 0,
   });
+  const [countsLoading, setCountsLoading] = useState(false);
   const [canManageSettings, setCanManageSettings] = useState(false);
+  const [statusData, setStatusData] = useState<Array<{ name: string; value: number }>>([]);
+  const [statusLoading, setStatusLoading] = useState(false);
 
   useEffect(() => {
     if (!token || !projectId) return;
+    setCountsLoading(true);
     Promise.all([
       issuesApi.list({ page: 1, limit: 1, token, project: projectId }).then((r) =>
         r.success && r.data ? r.data.total : 0
@@ -25,7 +35,9 @@ export default function ProjectDashboard() {
       sprintsApi.list(1, 1, projectId, undefined, token).then((r) =>
         r.success && r.data ? r.data.total : 0
       ),
-    ]).then(([issues, boards, sprints]) => setCounts({ issues, boards, sprints }));
+    ])
+      .then(([issues, boards, sprints]) => setCounts({ issues, boards, sprints }))
+      .finally(() => setCountsLoading(false));
   }, [token, projectId]);
 
   useEffect(() => {
@@ -38,8 +50,42 @@ export default function ProjectDashboard() {
     });
   }, [token, projectId]);
 
+  useEffect(() => {
+    if (!token || !projectId) return;
+    setStatusLoading(true);
+
+    projectsApi.get(projectId, token).then((projRes) => {
+      if (!projRes.success || !projRes.data) {
+        setStatusLoading(false);
+        return;
+      }
+      const statuses =
+        projRes.data.statuses && projRes.data.statuses.length
+          ? projRes.data.statuses.map((s) => s.name)
+          : DEFAULT_STATUSES;
+
+      Promise.all(
+        statuses.map((statusName) =>
+          issuesApi
+            .list({ page: 1, limit: 1, token, project: projectId, status: statusName })
+            .then((r) => (r.success && r.data ? r.data.total : 0))
+        )
+      )
+        .then((values) => {
+          const data = statuses.map((name, idx) => ({ name, value: values[idx] ?? 0 }));
+          const nonZero = data.filter((d) => d.value > 0);
+          setStatusData(nonZero.length > 0 ? nonZero : data);
+        })
+        .finally(() => setStatusLoading(false));
+    });
+  }, [token, projectId]);
+
   if (!projectId) return null;
 
+  const totalIssuesFromChart = statusData.reduce((sum, d) => sum + d.value, 0);
+  const doneCount =
+    statusData.find((d) => d.name.toLowerCase() === 'done')?.value ?? 0;
+  const openCount = totalIssuesFromChart - doneCount;
   const base = `/projects/${projectId}`;
   return (
     <div className="p-8 animate-fade-in">
@@ -48,6 +94,76 @@ export default function ProjectDashboard() {
         <p className="text-[13px] text-[color:var(--text-muted)] mb-6">
           Overview and quick links for this project.
         </p>
+
+        <div className="mb-6 grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)]">
+          <SectionCard
+            title="Summary"
+            description="High-level snapshot of this project."
+          >
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+              <MetricCard
+                title="Issues"
+                value={counts.issues || totalIssuesFromChart}
+                loading={countsLoading}
+              />
+              <MetricCard title="Boards" value={counts.boards} loading={countsLoading} />
+              <MetricCard title="Sprints" value={counts.sprints} loading={countsLoading} />
+              <MetricCard
+                title="Open"
+                value={openCount}
+                helperText="Not yet done"
+                loading={countsLoading}
+              />
+              <MetricCard
+                title="Done"
+                value={doneCount}
+                helperText="Completed issues"
+                loading={countsLoading}
+              />
+            </div>
+          </SectionCard>
+
+          <SectionCard
+            title="Issues by status"
+            description="Distribution of issues in this project by status."
+          >
+            <div className="h-56">
+              {statusLoading ? (
+                <div className="h-full flex items-center justify-center text-[color:var(--text-muted)] text-sm animate-pulse">
+                  Loading chart…
+                </div>
+              ) : statusData.length === 0 ? (
+                <div className="h-full flex items-center justify-center text-[color:var(--text-muted)] text-sm">
+                  No issues yet for this project.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={statusData}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius={50}
+                      outerRadius={80}
+                      paddingAngle={3}
+                      label={({ name, value }) => `${name}: ${value}`}
+                      labelLine={false}
+                    >
+                      {statusData.map((entry, index) => (
+                        <Cell
+                          key={entry.name}
+                          fill={STATUS_COLORS[index % STATUS_COLORS.length]}
+                        />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </SectionCard>
+        </div>
 
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
           <Link

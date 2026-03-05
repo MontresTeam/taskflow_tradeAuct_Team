@@ -11,6 +11,9 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
+import MetricCard from '../components/MetricCard';
+import SectionCard from '../components/SectionCard';
+import { getChartColor } from '../lib/chartTheme';
 
 export default function Dashboard() {
   const { token } = useAuth();
@@ -74,25 +77,19 @@ export default function Dashboard() {
           </div>
         ) : stats && (stats.totalIssues > 0 || chartData.length > 0) ? (
           <div className="mb-8 space-y-6">
-            <h2 className="text-sm font-semibold">Cross-project overview</h2>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="rounded-2xl bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] p-5">
-                <p className="text-[12px] text-[color:var(--text-muted)] uppercase tracking-wider">Total issues</p>
-                <p className="text-2xl font-semibold text-[color:var(--text-primary)] mt-1">{stats.totalIssues}</p>
+            <SectionCard
+              title="Cross-project overview"
+              description="Key issue stats across all projects you can access."
+            >
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <MetricCard title="Total issues" value={stats.totalIssues} />
+                {chartData.slice(0, 3).map(({ status, count }) => (
+                  <MetricCard key={status} title={status} value={count} />
+                ))}
               </div>
-              {chartData.slice(0, 3).map(({ status, count }) => (
-                <div
-                  key={status}
-                  className="rounded-2xl bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] p-5"
-                >
-                  <p className="text-[12px] text-[color:var(--text-muted)] uppercase tracking-wider truncate">{status}</p>
-                  <p className="text-2xl font-semibold text-[color:var(--text-primary)] mt-1">{count}</p>
-                </div>
-              ))}
-            </div>
+            </SectionCard>
             {chartData.length > 0 && (
-              <div className="rounded-2xl bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] p-5">
-                <h3 className="text-sm font-semibold text-[color:var(--text-primary)] mb-4">Issues by status</h3>
+              <SectionCard title="Issues by status">
                 <div className="h-64">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
@@ -107,15 +104,14 @@ export default function Dashboard() {
                         }}
                         labelStyle={{ color: 'var(--text-primary)' }}
                       />
-                      <Bar dataKey="count" fill="var(--accent)" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="count" fill={getChartColor(0)} radius={[4, 4, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
-              </div>
+              </SectionCard>
             )}
             {stats.recentIssues.length > 0 && (
-              <div className="rounded-2xl bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] p-5">
-                <h3 className="text-sm font-semibold text-[color:var(--text-primary)] mb-3">Recent activity</h3>
+              <SectionCard title="Recent activity">
                 <ul className="space-y-2">
                   {stats.recentIssues.map((issue) => (
                     <li key={issue._id}>
@@ -134,7 +130,7 @@ export default function Dashboard() {
                     </li>
                   ))}
                 </ul>
-              </div>
+              </SectionCard>
             )}
           </div>
         ) : null}

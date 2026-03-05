@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../lib/api';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { getChartColor } from '../lib/chartTheme';
 
 interface UsageStats {
   dailyActiveUsers: Array<{ date: string; count: number }>;
@@ -95,7 +96,7 @@ export default function Analytics() {
                       <Tooltip
                         contentStyle={{ backgroundColor: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}
                       />
-                      <Bar dataKey="count" name="DAU" fill="var(--accent)" />
+                      <Bar dataKey="count" name="DAU" fill={getChartColor(0)} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -114,7 +115,7 @@ export default function Analytics() {
                       <Tooltip
                         contentStyle={{ backgroundColor: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}
                       />
-                      <Bar dataKey="count" name="Count" fill="var(--accent)" />
+                      <Bar dataKey="count" name="Count" fill={getChartColor(1)} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>

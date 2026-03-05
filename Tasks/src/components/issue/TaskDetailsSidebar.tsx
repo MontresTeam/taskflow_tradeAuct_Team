@@ -225,7 +225,7 @@ export default function TaskDetailsSidebar({
 
   return (
     <aside className="lg:order-none order-first w-full lg:max-w-[320px]">
-      <div className="sticky top-6 space-y-4">
+      <div className="sticky top-6 max-h-[calc(100vh-5rem)] overflow-y-auto space-y-4 pr-1">
         <div className="rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-[color:var(--border-subtle)] bg-[color:var(--bg-elevated)]">
             <span className="text-xs font-semibold text-[color:var(--text-primary)]">Details</span>

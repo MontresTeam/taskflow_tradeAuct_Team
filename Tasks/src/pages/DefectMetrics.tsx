@@ -3,6 +3,9 @@ import { useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { dashboardApi, projectsApi, type Project } from '../lib/api';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import MetricCard from '../components/MetricCard';
+import SectionCard from '../components/SectionCard';
+import { getChartColor } from '../lib/chartTheme';
 
 interface DefectMetricsData {
   totalBugs: number;
@@ -102,31 +105,23 @@ export default function DefectMetrics() {
         <div className="rounded-2xl bg-red-500/10 border border-red-500/30 p-6 text-red-400">{error}</div>
       ) : data ? (
         <div className="space-y-6">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="rounded-2xl bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] p-5">
-              <p className="text-[12px] text-[color:var(--text-muted)] uppercase tracking-wider">Total bugs</p>
-              <p className="text-2xl font-semibold text-[color:var(--text-primary)] mt-1">{data.totalBugs}</p>
+          <SectionCard title="Defect summary" description="Snapshot of bugs and density for this scope.">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <MetricCard title="Total bugs" value={data.totalBugs} />
+              <MetricCard title="Open" value={data.openBugs} />
+              <MetricCard title="Closed" value={data.closedBugs} />
+              {data.defectDensity != null && (
+                <MetricCard
+                  title="Defect density"
+                  value={data.defectDensity}
+                  helperText="Bugs per story point"
+                />
+              )}
             </div>
-            <div className="rounded-2xl bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] p-5">
-              <p className="text-[12px] text-[color:var(--text-muted)] uppercase tracking-wider">Open</p>
-              <p className="text-2xl font-semibold text-[color:var(--text-primary)] mt-1">{data.openBugs}</p>
-            </div>
-            <div className="rounded-2xl bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] p-5">
-              <p className="text-[12px] text-[color:var(--text-muted)] uppercase tracking-wider">Closed</p>
-              <p className="text-2xl font-semibold text-[color:var(--text-primary)] mt-1">{data.closedBugs}</p>
-            </div>
-            {data.defectDensity != null && (
-              <div className="rounded-2xl bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] p-5">
-                <p className="text-[12px] text-[color:var(--text-muted)] uppercase tracking-wider">Defect density</p>
-                <p className="text-2xl font-semibold text-[color:var(--text-primary)] mt-1">{data.defectDensity}</p>
-                <p className="text-xs text-[color:var(--text-muted)]">bugs per story point</p>
-              </div>
-            )}
-          </div>
+          </SectionCard>
 
           {statusData.length > 0 && (
-            <div className="rounded-2xl bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] p-5">
-              <h3 className="text-sm font-semibold text-[color:var(--text-primary)] mb-4">Bugs by status</h3>
+            <SectionCard title="Bugs by status">
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={statusData}>
@@ -136,16 +131,15 @@ export default function DefectMetrics() {
                     <Tooltip
                       contentStyle={{ backgroundColor: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}
                     />
-                    <Bar dataKey="count" name="Count" fill="var(--accent)" />
+                    <Bar dataKey="count" name="Count" fill={getChartColor(0)} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-            </div>
+            </SectionCard>
           )}
 
           {priorityData.length > 0 && (
-            <div className="rounded-2xl bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] p-5">
-              <h3 className="text-sm font-semibold text-[color:var(--text-primary)] mb-4">Bugs by priority</h3>
+            <SectionCard title="Bugs by priority">
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={priorityData}>
@@ -155,11 +149,11 @@ export default function DefectMetrics() {
                     <Tooltip
                       contentStyle={{ backgroundColor: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}
                     />
-                    <Bar dataKey="count" name="Count" fill="var(--accent)" />
+                    <Bar dataKey="count" name="Count" fill={getChartColor(1)} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-            </div>
+            </SectionCard>
           )}
 
           {data.totalBugs === 0 && (

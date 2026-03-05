@@ -186,7 +186,7 @@ export default function Profile() {
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={avatarLoading}
-              className="px-3 py-1.5 rounded-md bg-white/90 text-black text-xs font-medium hover:bg-white disabled:opacity-50"
+              className="px-3 py-1.5 rounded-md bg-[color:var(--bg-surface)] text-[color:var(--text-primary)] text-xs font-medium border border-[color:var(--border-subtle)] hover:bg-[color:var(--bg-page)] disabled:opacity-50"
             >
               {avatarLoading ? 'Uploading…' : 'Upload'}
             </button>

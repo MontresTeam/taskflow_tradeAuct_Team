@@ -230,7 +230,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                     isProjectsLink ? isActive : isActive || (projectId && location.pathname.startsWith(item.to));
                   return `flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition animation-delay-${
                     (i + 1) * 100
-                  } animate-fade-in ${
+                  } animate-fade-in hover-elevated ${
                     active
                       ? 'bg-[color:var(--bg-elevated)] text-[color:var(--text-primary)] border border-[color:var(--border-subtle)]'
                       : 'text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)] hover:bg-[color:var(--bg-surface)]'
