@@ -13,7 +13,7 @@ export function parseDuration(input: string): number | null {
   let totalMinutes = 0;
 
   for (const token of tokens) {
-    const m = token.match(/^([0-9]*\.?[0-9]+)([dhm])$/i);
+    const m = token.match(/^([0-9]*\.?[0-9]+)(d|h|m|sec|s)$/i);
     if (!m) return null;
     const value = parseFloat(m[1]);
     const unit = m[2].toLowerCase();
@@ -24,6 +24,8 @@ export function parseDuration(input: string): number | null {
       totalMinutes += value * 60;
     } else if (unit === 'm') {
       totalMinutes += value;
+    } else if (unit === 's' || unit === 'sec') {
+      totalMinutes += value / 60;
     }
   }
 
@@ -53,7 +55,7 @@ export default function WorkLogInput({ onAdd, submitting }: WorkLogInputProps) {
     e.preventDefault();
     const minutes = parseDuration(duration);
     if (!minutes) {
-      setError('Enter time like 1h 30m, 2d, 45m, 2.5h');
+      setError('Enter time like 1h 30m, 2d, 45m, 1h 2m 10s');
       return;
     }
     setError(null);
@@ -75,7 +77,7 @@ export default function WorkLogInput({ onAdd, submitting }: WorkLogInputProps) {
             type="text"
             value={duration}
             onChange={(e) => setDuration(e.target.value)}
-            placeholder="e.g. 2h 30m, 1d, 45m"
+            placeholder="e.g. 2h 30m, 1d, 1h 2m 10s"
             className="w-full px-3 py-1.5 rounded-md bg-[color:var(--bg-page)] border border-[color:var(--border-subtle)] text-[color:var(--text-primary)] text-xs placeholder-[color:var(--text-muted)] focus:outline-none focus:ring-1 focus:ring-[color:var(--accent)]/40"
           />
         </div>

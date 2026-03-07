@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import type { Issue, Project, User, WorkLog } from '../../lib/api';
 import { MetaIconGlyph, type MetaIconKey } from '../../pages/ProjectSettings';
-import { formatMinutes } from './WorkLogInput';
+import { formatMinutes, parseDuration } from './WorkLogInput';
 import WatchButton from './WatchButton';
 
 function formatDate(s: string | undefined) {
@@ -41,7 +41,7 @@ interface TaskDetailsSidebarProps {
   newLabel: string;
   workLogs: WorkLog[];
   onUpdateField: (
-    field: 'status' | 'type' | 'priority' | 'assignee' | 'dueDate' | 'startDate' | 'fixVersion',
+    field: 'status' | 'type' | 'priority' | 'assignee' | 'dueDate' | 'startDate' | 'fixVersion' | 'timeEstimateMinutes',
     value: string | number | null
   ) => void;
   onUpdateAffectsVersions: (versions: string[]) => void;
@@ -180,6 +180,76 @@ function InlineDate({
       className={`w-full text-left px-3 py-2 rounded-md min-h-[36px] text-xs hover:bg-[color:var(--bg-surface)] focus:outline-none focus:ring-1 focus:ring-[color:var(--accent)]/40 focus:ring-inset transition-colors ${
         isHot ? 'text-red-400 font-medium' : 'text-[color:var(--text-primary)]'
       }`}
+    >
+      {display}
+    </button>
+  );
+}
+
+function InlineEstimate({
+  valueMinutes,
+  onChange,
+  disabled,
+}: {
+  valueMinutes: number | undefined;
+  onChange: (minutes: number | null) => void;
+  disabled?: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [inputValue, setInputValue] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const display = valueMinutes != null && valueMinutes > 0 ? formatMinutes(valueMinutes) : '—';
+
+  function handleDone() {
+    const trimmed = inputValue.trim();
+    if (!trimmed) {
+      onChange(null);
+      setEditing(false);
+      setError(null);
+      return;
+    }
+    const minutes = parseDuration(trimmed);
+    if (minutes == null || minutes <= 0) {
+      setError('e.g. 1h 2m 10s');
+      return;
+    }
+    setError(null);
+    onChange(minutes);
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <div>
+        <input
+          type="text"
+          value={inputValue}
+          onChange={(e) => setInputValue(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && handleDone()}
+          onBlur={handleDone}
+          disabled={disabled}
+          autoFocus
+          placeholder="e.g. 1h 2m 10s"
+          className={`${inputBase} ${error ? 'border-red-400' : ''}`}
+        />
+        {error && <p className="text-[10px] text-red-400 mt-0.5">{error}</p>}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (!disabled) {
+          setInputValue(valueMinutes != null && valueMinutes > 0 ? formatMinutes(valueMinutes) : '');
+          setError(null);
+          setEditing(true);
+        }
+      }}
+      disabled={disabled}
+      className="w-full text-left px-3 py-2 rounded-md min-h-[36px] text-xs text-[color:var(--text-primary)] hover:bg-[color:var(--bg-surface)] focus:outline-none focus:ring-1 focus:ring-[color:var(--accent)]/40 focus:ring-inset transition-colors"
     >
       {display}
     </button>
@@ -482,6 +552,21 @@ export default function TaskDetailsSidebar({
                   )}
                 </div>
               )}
+            </div>
+
+            {/* Estimate */}
+            <div className="px-4 py-3 space-y-3">
+              <label className="block text-[11px] font-medium text-[color:var(--text-muted)] uppercase tracking-wider">
+                Estimate
+              </label>
+              <InlineEstimate
+                valueMinutes={issue.timeEstimateMinutes}
+                onChange={(v) => onUpdateField('timeEstimateMinutes', v)}
+                disabled={!!updatingField}
+              />
+              <p className="text-[11px] text-[color:var(--text-muted)]">
+                e.g. 1h 2m 10s
+              </p>
             </div>
 
             {/* Time logged */}

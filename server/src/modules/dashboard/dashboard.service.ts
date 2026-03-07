@@ -66,6 +66,75 @@ export async function getWorkloadStats(userId: string, projectId?: string): Prom
   return { entries };
 }
 
+export interface EstimatesByProject {
+  projectId: string;
+  projectName: string;
+  totalMinutes: number;
+}
+
+export interface EstimatesByAssignee {
+  userId: string;
+  userName: string;
+  totalMinutes: number;
+}
+
+export interface EstimatesStats {
+  totalMinutes: number;
+  byProject: EstimatesByProject[];
+  byAssignee: EstimatesByAssignee[];
+}
+
+export async function getEstimatesStats(userId: string, projectId?: string): Promise<EstimatesStats> {
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+  let projectIds: mongoose.Types.ObjectId[];
+  if (projectId) {
+    const isMember = await ProjectMember.exists({ user: userObjectId, project: projectId });
+    if (!isMember) return { totalMinutes: 0, byProject: [], byAssignee: [] };
+    projectIds = [new mongoose.Types.ObjectId(projectId)];
+  } else {
+    const ids = await ProjectMember.find({ user: userObjectId }).distinct('project');
+    projectIds = ids.map((id) => new mongoose.Types.ObjectId(id));
+  }
+  if (projectIds.length === 0) return { totalMinutes: 0, byProject: [], byAssignee: [] };
+
+  const [byProjectAgg, byAssigneeAgg] = await Promise.all([
+    Issue.aggregate<{ _id: mongoose.Types.ObjectId; totalMinutes: number }>([
+      { $match: { project: { $in: projectIds }, timeEstimateMinutes: { $exists: true, $gt: 0 } } },
+      { $group: { _id: '$project', totalMinutes: { $sum: '$timeEstimateMinutes' } } },
+    ]),
+    Issue.aggregate<{ _id: mongoose.Types.ObjectId | null; totalMinutes: number }>([
+      { $match: { project: { $in: projectIds }, timeEstimateMinutes: { $exists: true, $gt: 0 } } },
+      { $group: { _id: '$assignee', totalMinutes: { $sum: '$timeEstimateMinutes' } } },
+    ]),
+  ]);
+
+  const { Project } = await import('../projects/project.model');
+  const projects = await Project.find({ _id: { $in: projectIds } }).select('name').lean();
+  const projectMap = new Map(projects.map((p) => [String(p._id), (p as { name: string }).name]));
+
+  const assigneeIds = byAssigneeAgg.map((r) => r._id).filter(Boolean) as mongoose.Types.ObjectId[];
+  const users = assigneeIds.length > 0
+    ? await User.find({ _id: { $in: assigneeIds } }).select('name').lean()
+    : [];
+  const userMap = new Map(users.map((u) => [String(u._id), (u as { name: string }).name]));
+
+  const byProject: EstimatesByProject[] = byProjectAgg.map((row) => ({
+    projectId: String(row._id),
+    projectName: projectMap.get(String(row._id)) ?? 'Unknown',
+    totalMinutes: row.totalMinutes,
+  }));
+
+  const byAssignee: EstimatesByAssignee[] = byAssigneeAgg.map((row) => ({
+    userId: row._id ? String(row._id) : '',
+    userName: row._id ? (userMap.get(String(row._id)) ?? 'Unassigned') : 'Unassigned',
+    totalMinutes: row.totalMinutes,
+  }));
+
+  const totalMinutes = byProject.reduce((sum, p) => sum + p.totalMinutes, 0);
+
+  return { totalMinutes, byProject, byAssignee };
+}
+
 export interface DashboardStats {
   totalIssues: number;
   issuesByStatus: Record<string, number>;

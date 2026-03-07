@@ -15,6 +15,7 @@ import Profile from './pages/Profile';
 import Issues from './pages/Issues';
 import GlobalIssues from './pages/GlobalIssues';
 import Workload from './pages/Workload';
+import Estimates from './pages/Estimates';
 import Portfolio from './pages/Portfolio';
 import ExecutiveDashboard from './pages/ExecutiveDashboard';
 import Analytics from './pages/Analytics';
@@ -54,6 +55,7 @@ function AppRoutes() {
         <Route path="/profile" element={<Profile />} />
         <Route path="/issues" element={<GlobalIssues />} />
         <Route path="/workload" element={<Workload />} />
+        <Route path="/estimates" element={<Estimates />} />
         <Route path="/portfolio" element={<Portfolio />} />
         <Route path="/executive" element={<ExecutiveDashboard />} />
         <Route path="/analytics" element={<Analytics />} />

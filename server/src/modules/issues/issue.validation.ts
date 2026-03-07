@@ -15,6 +15,7 @@ export const createIssueSchema = z.object({
     dueDate: z.string().optional(),
     startDate: z.string().optional(),
     storyPoints: z.number().optional(),
+    timeEstimateMinutes: z.number().optional(),
     checklist: z.array(z.object({
       id: z.string(),
       text: z.string(),
@@ -42,6 +43,7 @@ export const updateIssueSchema = z.object({
     dueDate: z.string().optional().nullable(),
     startDate: z.string().optional().nullable(),
     storyPoints: z.number().optional().nullable(),
+    timeEstimateMinutes: z.number().optional().nullable(),
     checklist: z.array(z.object({
       id: z.string(),
       text: z.string(),

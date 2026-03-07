@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware } from '../../middleware/auth.middleware';
 import { asyncHandler } from '../../utils/asyncHandler';
-import { getDashboardStats, getWorkloadStats, getPortfolioStats, getExecutiveStats, getDefectMetrics, getCostUsage } from './dashboard.controller';
+import { getDashboardStats, getWorkloadStats, getPortfolioStats, getExecutiveStats, getDefectMetrics, getCostUsage, getEstimatesStats } from './dashboard.controller';
 
 const router = Router();
 
@@ -13,5 +13,6 @@ router.get('/portfolio', asyncHandler(getPortfolioStats));
 router.get('/executive', asyncHandler(getExecutiveStats));
 router.get('/defect-metrics', asyncHandler(getDefectMetrics));
 router.get('/cost-usage', asyncHandler(getCostUsage));
+router.get('/estimates', asyncHandler(getEstimatesStats));
 
 export const dashboardRoutes = router;

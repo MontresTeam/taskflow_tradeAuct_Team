@@ -11,7 +11,6 @@ import {
   type Comment,
   type User,
   type Project,
-  type ChecklistItem,
   type Attachment,
   getIssueKey,
 } from '../lib/api';
@@ -20,7 +19,6 @@ import {
   TaskBreadcrumb,
   TaskHeader,
   TaskDescription,
-  TaskChecklist,
   TaskAttachments,
   TaskSubtasks,
   TaskIssueLinks,
@@ -53,8 +51,6 @@ export default function IssueDetail() {
   const [submittingComment, setSubmittingComment] = useState(false);
   const [submittingWorkLog, setSubmittingWorkLog] = useState(false);
   const [updatingField, setUpdatingField] = useState<string | null>(null);
-  const [newChecklistText, setNewChecklistText] = useState('');
-  const [addingChecklist, setAddingChecklist] = useState(false);
   const [newLabel, setNewLabel] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [timeLogOpen, setTimeLogOpen] = useState(false);
@@ -203,7 +199,8 @@ export default function IssueDetail() {
       | 'dueDate'
       | 'startDate'
       | 'storyPoints'
-      | 'fixVersion',
+      | 'fixVersion'
+      | 'timeEstimateMinutes',
     value: string | number | null
   ) {
     if (!token || !issue?._id || !issue) return;
@@ -213,7 +210,9 @@ export default function IssueDetail() {
         ? { assignee: value === '' || value === '__unassigned__' ? '' : value }
         : field === 'dueDate' || field === 'startDate'
           ? { [field]: value === '' ? null : value }
-          : { [field]: value };
+          : field === 'timeEstimateMinutes'
+            ? { timeEstimateMinutes: value }
+            : { [field]: value };
     await updateIssue(payload);
     setUpdatingField(null);
   }
@@ -234,34 +233,8 @@ export default function IssueDetail() {
     }
   }
 
-  async function saveChecklist(checklist: ChecklistItem[]) {
-    await updateIssue({ checklist });
-  }
-
-  function addChecklistItem() {
-    if (!newChecklistText.trim() || !issue) return;
-    const list = issue.checklist ?? [];
-    const newItem: ChecklistItem = {
-      id: crypto.randomUUID(),
-      text: newChecklistText.trim(),
-      done: false,
-    };
-    setNewChecklistText('');
-    setAddingChecklist(false);
-    saveChecklist([...list, newItem]);
-  }
-
-  function toggleChecklistItem(itemId: string) {
-    if (!issue) return;
-    const list = (issue.checklist ?? []).map((i) =>
-      i.id === itemId ? { ...i, done: !i.done } : i
-    );
-    saveChecklist(list);
-  }
-
-  function removeChecklistItem(itemId: string) {
-    if (!issue) return;
-    saveChecklist((issue.checklist ?? []).filter((i) => i.id !== itemId));
+  async function updateDescription(description: string) {
+    await updateIssue({ description });
   }
 
   function addLabel() {
@@ -333,17 +306,7 @@ export default function IssueDetail() {
                 getPriorityMeta={getPriorityMeta}
                 getStatusMeta={getStatusMeta}
               />
-              <TaskDescription issue={issue} />
-              <TaskChecklist
-                issue={issue}
-                newChecklistText={newChecklistText}
-                addingChecklist={addingChecklist}
-                onNewChecklistTextChange={setNewChecklistText}
-                onAddChecklistItem={addChecklistItem}
-                onToggleChecklistItem={toggleChecklistItem}
-                onRemoveChecklistItem={removeChecklistItem}
-                onSetAddingChecklist={setAddingChecklist}
-              />
+              <TaskDescription issue={issue} onUpdateDescription={updateDescription} />
               <TaskSubtasks
                 issueId={issue._id}
                 projectId={projectId}

@@ -290,15 +290,13 @@ export default function GlobalIssues() {
   }, [form.project, token]);
 
   useEffect(() => {
-    if (form.project && token && (typeList.includes('Epic') || typeList.includes('Story'))) {
-      const types = ['Epic', 'Story'].filter((t) => typeList.includes(t));
+    if (form.project && token) {
       issuesApi
         .list({
           token,
           project: form.project,
           page: 1,
-          limit: 100,
-          type: types.join(','),
+          limit: 200,
         })
         .then((res) => {
           if (res.success && res.data) setParentCandidates(res.data.data ?? []);
@@ -306,7 +304,7 @@ export default function GlobalIssues() {
     } else {
       setParentCandidates([]);
     }
-  }, [form.project, token, typeList.join(',')]);
+  }, [form.project, token]);
 
   useEffect(() => {
     if (form.project && token) {

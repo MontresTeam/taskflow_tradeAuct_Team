@@ -13,7 +13,6 @@ import { env } from '../../config/env';
 
 const DEFAULT_STATUS = 'Backlog';
 const DEFAULT_DONE_STATUSES = ['Done', 'Closed', 'Resolved'];
-const PARENT_ALLOWED_TYPES = ['Epic', 'Story'];
 
 async function validateParent(
   parentId: string | null | undefined,
@@ -25,9 +24,6 @@ async function validateParent(
   if (!parent) throw new ApiError(404, 'Parent issue not found');
   if (String(parent.project) !== String(projectId)) {
     throw new ApiError(400, 'Parent must be in the same project');
-  }
-  if (!PARENT_ALLOWED_TYPES.includes(parent.type)) {
-    throw new ApiError(400, 'Only Epic and Story can have subtasks');
   }
   if (childId && String(parentId) === String(childId)) {
     throw new ApiError(400, 'Issue cannot be its own parent');
@@ -83,6 +79,7 @@ export async function create(
     dueDate: input.dueDate ? new Date(input.dueDate) : undefined,
     startDate: input.startDate ? new Date(input.startDate) : undefined,
     storyPoints: input.storyPoints,
+    timeEstimateMinutes: input.timeEstimateMinutes,
     checklist: input.checklist ?? [],
     customFieldValues: input.customFieldValues ?? {},
     fixVersion: input.fixVersion ?? undefined,
@@ -262,6 +259,7 @@ export async function update(
     if (input.startDate) updateData.startDate = new Date(input.startDate);
   }
   if (input.storyPoints !== undefined) updateData.storyPoints = input.storyPoints;
+  if (input.timeEstimateMinutes !== undefined) updateData.timeEstimateMinutes = input.timeEstimateMinutes;
   if (input.checklist !== undefined) updateData.checklist = input.checklist;
   if (input.customFieldValues !== undefined) updateData.customFieldValues = input.customFieldValues;
 
@@ -270,6 +268,7 @@ export async function update(
   if (input.dueDate === null || input.dueDate === '') unset.dueDate = 1;
   if (input.startDate === null || input.startDate === '') unset.startDate = 1;
   if (input.storyPoints === null) unset.storyPoints = 1;
+  if (input.timeEstimateMinutes === null) unset.timeEstimateMinutes = 1;
   if (input.fixVersion === null || input.fixVersion === '') unset.fixVersion = 1;
   if (input.fixVersion !== undefined && input.fixVersion !== null && input.fixVersion !== '') updateData.fixVersion = input.fixVersion;
   if (input.affectsVersions !== undefined) updateData.affectsVersions = input.affectsVersions;
@@ -318,6 +317,7 @@ export async function update(
     addChange('startDate', oldDate, newDate);
   }
   if (input.storyPoints !== undefined) addChange('storyPoints', oldRaw.storyPoints, input.storyPoints ?? undefined);
+  if (input.timeEstimateMinutes !== undefined) addChange('timeEstimateMinutes', oldRaw.timeEstimateMinutes, input.timeEstimateMinutes ?? undefined);
   if (input.checklist !== undefined && !arraysEqual(oldRaw.checklist as unknown[] | undefined, input.checklist)) {
     addChange('checklist', oldRaw.checklist, input.checklist);
   }

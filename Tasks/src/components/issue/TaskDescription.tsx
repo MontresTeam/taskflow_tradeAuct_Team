@@ -1,9 +1,12 @@
+import { useState, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Issue } from '../../lib/api';
+import DescriptionEditor from './DescriptionEditor';
 
 interface TaskDescriptionProps {
   issue: Issue;
+  onUpdateDescription?: (description: string) => void;
 }
 
 function DescriptionBody({ body }: { body: string }) {
@@ -45,17 +48,90 @@ function DescriptionBody({ body }: { body: string }) {
   );
 }
 
-export default function TaskDescription({ issue }: TaskDescriptionProps) {
+export default function TaskDescription({ issue, onUpdateDescription }: TaskDescriptionProps) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editValue, setEditValue] = useState(issue.description ?? '');
+
+  const handleSave = useCallback(
+    async (description: string) => {
+      if (onUpdateDescription && description !== (issue.description ?? '')) {
+        setSaving(true);
+        try {
+          await onUpdateDescription(description);
+          setEditing(false);
+        } finally {
+          setSaving(false);
+        }
+      } else {
+        setEditing(false);
+      }
+    },
+    [issue.description, onUpdateDescription]
+  );
+
+  if (editing && onUpdateDescription) {
+    return (
+      <section className="mb-8">
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-xs font-semibold text-[color:var(--text-muted)] uppercase tracking-wider">
+            Description
+          </h2>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setEditing(false)}
+              className="text-xs text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)] transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSave(editValue)}
+              disabled={saving}
+              className="text-xs font-medium text-[color:var(--accent)] hover:underline disabled:opacity-50"
+            >
+              {saving ? 'Saving…' : 'Done'}
+            </button>
+          </div>
+        </div>
+        <div data-description-editor>
+          <DescriptionEditor
+            value={editValue}
+            onChange={setEditValue}
+            placeholder="Add a description…"
+          />
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="mb-8">
-      <h2 className="text-xs font-semibold text-[color:var(--text-muted)] uppercase tracking-wider mb-2">
-        Description
-      </h2>
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-xs font-semibold text-[color:var(--text-muted)] uppercase tracking-wider">
+          Description
+        </h2>
+        {onUpdateDescription && (
+          <button
+            type="button"
+            onClick={() => {
+              setEditValue(issue.description ?? '');
+              setEditing(true);
+            }}
+            className="text-xs text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)] transition-colors"
+          >
+            Edit
+          </button>
+        )}
+      </div>
       <div className="rounded-xl bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] p-4">
         {issue.description ? (
           <DescriptionBody body={issue.description} />
         ) : (
-          <p className="text-xs text-[color:var(--text-muted)] italic">Add a description…</p>
+          <p className="text-xs text-[color:var(--text-muted)] italic">
+            {onUpdateDescription ? 'Add a description…' : 'No description.'}
+          </p>
         )}
       </div>
     </section>

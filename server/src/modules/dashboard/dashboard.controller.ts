@@ -42,6 +42,14 @@ export async function getDefectMetrics(req: Request & { user?: AuthPayload }, re
   res.status(200).json({ success: true, data });
 }
 
+export async function getEstimatesStats(req: Request & { user?: AuthPayload }, res: Response): Promise<void> {
+  const userId = req.user?.id;
+  if (!userId) throw new ApiError(401, 'Unauthorized');
+  const projectId = req.query.projectId as string | undefined;
+  const data = await dashboardService.getEstimatesStats(userId, projectId);
+  res.status(200).json({ success: true, data });
+}
+
 export async function getCostUsage(req: Request & { user?: AuthPayload }, res: Response): Promise<void> {
   const userId = req.user?.id;
   if (!userId) throw new ApiError(401, 'Unauthorized');

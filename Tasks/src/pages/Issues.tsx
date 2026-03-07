@@ -410,15 +410,13 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
   }, [token, projectId]);
 
   useEffect(() => {
-    if (modal && token && projectId && (typeList.includes('Epic') || typeList.includes('Story'))) {
-      const types = ['Epic', 'Story'].filter((t) => typeList.includes(t));
+    if (modal && token && projectId) {
       issuesApi
         .list({
           token,
           project: projectId,
           page: 1,
-          limit: 100,
-          type: types.join(','),
+          limit: 200,
         })
         .then((res) => {
           if (res.success && res.data) setParentCandidates(res.data.data);
@@ -426,7 +424,7 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
     } else {
       setParentCandidates([]);
     }
-  }, [modal, token, projectId, typeList.join(',')]);
+  }, [modal, token, projectId]);
 
   async function handleToggleWatch(issueId: string) {
     if (!token) return;

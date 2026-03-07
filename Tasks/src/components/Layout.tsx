@@ -49,6 +49,7 @@ function buildGlobalNav(user: { mustChangePassword?: boolean; permissions?: stri
     { to: '/projects', label: 'Projects', icon: <ProjectsIcon /> },
     { to: '/issues', label: 'All Issues', icon: <IssuesIcon /> },
     { to: '/workload', label: 'Workload', icon: <TimesheetIcon /> },
+    { to: '/estimates', label: 'Estimates', icon: <TimesheetIcon /> },
     { to: '/portfolio', label: 'Portfolio', icon: <ProjectsIcon /> },
   ];
   if (user?.role === 'admin') {

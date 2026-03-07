@@ -570,6 +570,11 @@ export const dashboardApi = {
       projectId ? `/dashboard/workload?projectId=${encodeURIComponent(projectId)}` : '/dashboard/workload',
       token
     ),
+  getEstimates: (token: string, projectId?: string) =>
+    api.get<{ totalMinutes: number; byProject: Array<{ projectId: string; projectName: string; totalMinutes: number }>; byAssignee: Array<{ userId: string; userName: string; totalMinutes: number }> }>(
+      projectId ? `/dashboard/estimates?projectId=${encodeURIComponent(projectId)}` : '/dashboard/estimates',
+      token
+    ),
 };
 
 /* Users */
@@ -736,6 +741,7 @@ export interface Issue {
   dueDate?: string;
   startDate?: string;
   storyPoints?: number;
+  timeEstimateMinutes?: number;
   checklist?: ChecklistItem[];
   customFieldValues?: Record<string, unknown>;
   fixVersion?: string;
@@ -795,6 +801,7 @@ export const issuesApi = {
       dueDate?: string | null;
       startDate?: string | null;
       storyPoints?: number | null;
+      timeEstimateMinutes?: number | null;
       parent?: string | null;
       sprint?: string | null;
       milestone?: string | null;

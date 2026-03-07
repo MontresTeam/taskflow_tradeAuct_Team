@@ -26,6 +26,7 @@ export interface IIssue extends Document {
   dueDate?: Date;
   startDate?: Date;
   storyPoints?: number;
+  timeEstimateMinutes?: number;
   checklist: IChecklistItem[];
   customFieldValues: Record<string, unknown>;
   fixVersion?: string;       // project version id (e.g. "1.0" or version id)
@@ -54,6 +55,7 @@ const issueSchema = new Schema<IIssue>(
     dueDate: { type: Date },
     startDate: { type: Date },
     storyPoints: { type: Number },
+    timeEstimateMinutes: { type: Number },
     checklist: {
       type: [{
         id: String,
