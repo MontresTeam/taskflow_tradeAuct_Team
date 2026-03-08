@@ -86,6 +86,8 @@ export interface ProjectDeliveryEstimate {
   loggedMinutesOnDone: number;
   burnRatePerDay: number;
   expectedDeliveryDate: string | null;
+  /** True when delivery date was computed using default 8h/day (no time logged on done issues yet) */
+  usedDefaultBurnRate?: boolean;
 }
 
 export interface EstimatesStats {
@@ -96,6 +98,7 @@ export interface EstimatesStats {
   loggedMinutesOnDone?: number;
   burnRatePerDay?: number;
   expectedDeliveryDate?: string | null;
+  usedDefaultBurnRate?: boolean;
   unestimatedIssuesCount?: number;
 }
 
@@ -158,9 +161,14 @@ export async function getProjectDeliveryEstimate(
     burnRatePerDay = loggedMinutesOnDone / daysDiff;
   }
 
+  /** When no time logged on done issues, use 8h/day so we can still show an expected delivery date */
+  const DEFAULT_BURN_RATE_MINUTES_PER_DAY = 8 * 60;
+  let usedDefaultBurnRate = false;
   let expectedDeliveryDate: string | null = null;
-  if (remainingEstimateMinutes > 0 && burnRatePerDay > 0) {
-    const daysToAdd = Math.ceil(remainingEstimateMinutes / burnRatePerDay);
+  if (remainingEstimateMinutes > 0) {
+    const rateToUse = burnRatePerDay > 0 ? burnRatePerDay : DEFAULT_BURN_RATE_MINUTES_PER_DAY;
+    if (burnRatePerDay <= 0) usedDefaultBurnRate = true;
+    const daysToAdd = Math.ceil(remainingEstimateMinutes / rateToUse);
     const delivery = new Date();
     delivery.setDate(delivery.getDate() + daysToAdd);
     expectedDeliveryDate = delivery.toISOString().slice(0, 10);
@@ -171,6 +179,7 @@ export async function getProjectDeliveryEstimate(
     loggedMinutesOnDone,
     burnRatePerDay,
     expectedDeliveryDate,
+    usedDefaultBurnRate: usedDefaultBurnRate || undefined,
   };
 }
 
@@ -240,6 +249,7 @@ export async function getEstimatesStats(userId: string, projectId?: string): Pro
     result.loggedMinutesOnDone = delivery.loggedMinutesOnDone;
     result.burnRatePerDay = delivery.burnRatePerDay;
     result.expectedDeliveryDate = delivery.expectedDeliveryDate;
+    result.usedDefaultBurnRate = delivery.usedDefaultBurnRate;
     result.unestimatedIssuesCount = unestimatedCount;
   }
 

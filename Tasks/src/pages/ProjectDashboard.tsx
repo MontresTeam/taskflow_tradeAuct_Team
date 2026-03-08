@@ -171,8 +171,12 @@ export default function ProjectDashboard() {
                       : '—'
                   }
                   helperText={
-                    !estimatesLoading && estimates && !estimates.expectedDeliveryDate
-                      ? 'Log time on completed tasks to see estimate'
+                    !estimatesLoading && estimates
+                      ? estimates.expectedDeliveryDate
+                        ? estimates.usedDefaultBurnRate
+                          ? 'Based on 8h/day (log time on completed tasks for a more accurate date)'
+                          : undefined
+                        : 'Log time on completed tasks to see estimate'
                       : undefined
                   }
                   loading={estimatesLoading}

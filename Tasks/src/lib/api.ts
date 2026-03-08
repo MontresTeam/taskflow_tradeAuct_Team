@@ -585,6 +585,7 @@ export interface EstimatesResponse {
   loggedMinutesOnDone?: number;
   burnRatePerDay?: number;
   expectedDeliveryDate?: string | null;
+  usedDefaultBurnRate?: boolean;
   unestimatedIssuesCount?: number;
 }
 
