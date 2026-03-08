@@ -11,3 +11,4 @@ backups
 backups.zip
 backups.tar.gz
 .env
+./src/uploads
