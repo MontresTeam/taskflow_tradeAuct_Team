@@ -27,6 +27,8 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   LogOutIcon,
+  FullscreenIcon,
+  FullscreenExitIcon,
 } from './icons/NavigationIcons';
 
 interface NavItem {
@@ -141,6 +143,27 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     if (typeof window === 'undefined') return false;
     return window.localStorage.getItem('taskflow_sidebar_collapsed') === 'true';
   });
+  const [isFullScreen, setIsFullScreen] = useState(false);
+
+  useEffect(() => {
+    function onFullScreenChange() {
+      setIsFullScreen(Boolean(document.fullscreenElement));
+    }
+    document.addEventListener('fullscreenchange', onFullScreenChange);
+    return () => document.removeEventListener('fullscreenchange', onFullScreenChange);
+  }, []);
+
+  async function toggleFullScreen() {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await document.documentElement.requestFullscreen();
+      }
+    } catch {
+      // e.g. user denied or not supported
+    }
+  }
 
   useEffect(() => {
     try {
@@ -311,6 +334,19 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       </aside>
       <div className="flex-1 flex flex-col min-w-0">
         <header className="shrink-0 flex items-center justify-end gap-3 px-4 py-2 border-b border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)]">
+          <button
+            type="button"
+            onClick={toggleFullScreen}
+            title={isFullScreen ? 'Exit full screen' : 'Full screen'}
+            aria-label={isFullScreen ? 'Exit full screen' : 'Full screen'}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[color:var(--border-subtle)] text-[color:var(--text-muted)] hover:bg-[color:var(--bg-surface)] hover:text-[color:var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]/40 focus:ring-offset-0 transition"
+          >
+            {isFullScreen ? (
+              <FullscreenExitIcon className="w-3.5 h-3.5" />
+            ) : (
+              <FullscreenIcon className="w-3.5 h-3.5" />
+            )}
+          </button>
           <button
             type="button"
             aria-label="Toggle theme"

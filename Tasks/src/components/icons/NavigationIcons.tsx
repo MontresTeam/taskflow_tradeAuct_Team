@@ -307,3 +307,25 @@ export function LogOutIcon(props: IconProps) {
   );
 }
 
+export function FullscreenIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M4 8V6a2 2 0 0 1 2-2h2" />
+      <path d="M4 16v2a2 2 0 0 0 2 2h2" />
+      <path d="M16 4h2a2 2 0 0 1 2 2v2" />
+      <path d="M16 20h2a2 2 0 0 0 2-2v-2" />
+    </BaseIcon>
+  );
+}
+
+export function FullscreenExitIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M8 4v2a2 2 0 0 1-2 2H4" />
+      <path d="M16 4v2a2 2 0 0 0 2 2h2" />
+      <path d="M16 20v-2a2 2 0 0 0 2-2h2" />
+      <path d="M8 20v-2a2 2 0 0 1-2-2H4" />
+    </BaseIcon>
+  );
+}
+
