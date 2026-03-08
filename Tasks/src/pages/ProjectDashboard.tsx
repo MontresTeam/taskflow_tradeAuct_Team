@@ -167,6 +167,31 @@ export default function ProjectDashboard() {
     }
     return points;
   }, [metrics]);
+
+  const typeVsStatusPivot = useMemo(() => {
+    if (!metrics?.typeVsStatus?.length) return null;
+    const statusOrder = statusList.length ? statusList : [...new Set(metrics.typeVsStatus.map((r) => r.status))].sort();
+    const types = [...new Set(metrics.typeVsStatus.map((r) => r.type))].sort();
+    const statuses = [...new Set(metrics.typeVsStatus.map((r) => r.status))].sort((a, b) => {
+      const i = statusOrder.indexOf(a);
+      const j = statusOrder.indexOf(b);
+      if (i !== -1 && j !== -1) return i - j;
+      if (i !== -1) return -1;
+      if (j !== -1) return 1;
+      return a.localeCompare(b);
+    });
+    const map = new Map<string, number>();
+    const rowTotals = new Map<string, number>();
+    const colTotals = new Map<string, number>();
+    let grandTotal = 0;
+    metrics.typeVsStatus.forEach((r) => {
+      map.set(`${r.type}|${r.status}`, r.count);
+      rowTotals.set(r.type, (rowTotals.get(r.type) ?? 0) + r.count);
+      colTotals.set(r.status, (colTotals.get(r.status) ?? 0) + r.count);
+      grandTotal += r.count;
+    });
+    return { types, statuses, map, rowTotals, colTotals, grandTotal };
+  }, [metrics, statusList]);
   return (
     <div className="p-8 animate-fade-in">
       <div className="w-full px-4 sm:px-6 lg:px-8">
@@ -348,34 +373,80 @@ export default function ProjectDashboard() {
 
           <SectionCard
             title="Type vs status"
-            description="Count of issues by type and status."
+            description="Issues by type and status. Click a count to open the filtered issues list."
           >
-            <div className="overflow-x-auto max-h-64 overflow-y-auto">
+            <div className="overflow-x-auto overflow-y-auto max-h-80">
               {metricsLoading ? (
                 <div className="h-32 flex items-center justify-center text-[color:var(--text-muted)] text-sm animate-pulse">
                   Loading…
                 </div>
-              ) : !metrics?.typeVsStatus?.length ? (
+              ) : !typeVsStatusPivot ? (
                 <div className="h-32 flex items-center justify-center text-[color:var(--text-muted)] text-sm">
                   No data.
                 </div>
               ) : (
-                <table className="w-full text-sm text-left">
+                <table className="w-full text-sm text-left border-collapse min-w-[320px]">
                   <thead>
                     <tr className="border-b border-[color:var(--border-subtle)]">
-                      <th className="py-2 pr-4 font-medium text-[color:var(--text-muted)]">Type</th>
-                      <th className="py-2 pr-4 font-medium text-[color:var(--text-muted)]">Status</th>
-                      <th className="py-2 font-medium text-[color:var(--text-muted)]">Count</th>
+                      <th className="py-2.5 pr-3 font-semibold text-[color:var(--text-muted)] bg-[color:var(--bg-surface)] sticky left-0 z-10 whitespace-nowrap">
+                        Type
+                      </th>
+                      {typeVsStatusPivot.statuses.map((status) => (
+                        <th
+                          key={status}
+                          className="py-2.5 px-2 font-semibold text-[color:var(--text-muted)] text-center min-w-[3rem]"
+                        >
+                          {status}
+                        </th>
+                      ))}
+                      <th className="py-2.5 pl-2 font-semibold text-[color:var(--text-muted)] text-center min-w-[3.5rem]">
+                        Total
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {metrics.typeVsStatus.map((row, i) => (
-                      <tr key={`${row.type}-${row.status}-${i}`} className="border-b border-[color:var(--border-subtle)]">
-                        <td className="py-1.5 pr-4 text-[color:var(--text-primary)]">{row.type}</td>
-                        <td className="py-1.5 pr-4 text-[color:var(--text-primary)]">{row.status}</td>
-                        <td className="py-1.5 text-[color:var(--text-primary)]">{row.count}</td>
+                    {typeVsStatusPivot.types.map((type) => (
+                      <tr key={type} className="border-b border-[color:var(--border-subtle)] hover:bg-[color:var(--bg-elevated)]/50">
+                        <td className="py-2 pr-3 font-medium text-[color:var(--text-primary)] sticky left-0 bg-[color:var(--bg-surface)] z-10 whitespace-nowrap">
+                          {type}
+                        </td>
+                        {typeVsStatusPivot.statuses.map((status) => {
+                          const count = typeVsStatusPivot.map.get(`${type}|${status}`) ?? 0;
+                          const url = `${base}/issues?type=${encodeURIComponent(type)}&status=${encodeURIComponent(status)}`;
+                          return (
+                            <td key={status} className="py-2 px-2 text-center">
+                              {count > 0 ? (
+                                <Link
+                                  to={url}
+                                  className="text-[color:var(--accent)] hover:underline font-medium"
+                                  title={`View ${count} issue(s)`}
+                                >
+                                  {count}
+                                </Link>
+                              ) : (
+                                <span className="text-[color:var(--text-muted)]">0</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                        <td className="py-2 pl-2 text-center font-medium text-[color:var(--text-primary)]">
+                          {typeVsStatusPivot.rowTotals.get(type) ?? 0}
+                        </td>
                       </tr>
                     ))}
+                    <tr className="border-t-2 border-[color:var(--border-subtle)] bg-[color:var(--bg-elevated)]/30 font-medium">
+                      <td className="py-2.5 pr-3 text-[color:var(--text-primary)] sticky left-0 bg-[color:var(--bg-elevated)]/30 z-10">
+                        Total
+                      </td>
+                      {typeVsStatusPivot.statuses.map((status) => (
+                        <td key={status} className="py-2.5 px-2 text-center text-[color:var(--text-primary)]">
+                          {typeVsStatusPivot.colTotals.get(status) ?? 0}
+                        </td>
+                      ))}
+                      <td className="py-2.5 pl-2 text-center text-[color:var(--text-primary)]">
+                        {typeVsStatusPivot.grandTotal}
+                      </td>
+                    </tr>
                   </tbody>
                 </table>
               )}
