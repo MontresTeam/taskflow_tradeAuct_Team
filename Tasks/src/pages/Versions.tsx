@@ -32,6 +32,7 @@ function StatusBadge({ status }: { status: ProjectVersion['status'] }) {
 
 /** Strip legacy "set to status" line from stored release notes for display */
 function sanitizeReleaseNotesForDisplay(notes: string): string {
+  if (!notes || typeof notes !== 'string') return '';
   return notes
     .replace(/\*?Issues in this release have been set to status:[^\n]*\n?/gi, '')
     .replace(/\n{3,}/g, '\n\n')
@@ -541,7 +542,7 @@ export default function Versions() {
                                 {v.releaseNotesByEnvironment?.[env.id] && (
                                   <button
                                     type="button"
-                                    onClick={() => setReleaseNotesModal({ versionName: v.name, envName: env.name, notes: v.releaseNotesByEnvironment![env.id], updatedCount: 0 })}
+                                    onClick={() => setReleaseNotesModal({ versionName: v.name, envName: env.name, notes: v.releaseNotesByEnvironment?.[env.id] ?? '', updatedCount: 0 })}
                                     className="text-indigo-400 hover:underline font-medium"
                                   >
                                     View notes

@@ -3,7 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useNotifications } from '../contexts/NotificationsContext';
 import { useEffect, useState, useMemo } from 'react';
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Area, AreaChart } from 'recharts';
-import { issuesApi, boardsApi, sprintsApi, projectsApi, dashboardApi, type EstimatesResponse, type ProjectMetricsResponse } from '../lib/api';
+import { issuesApi, boardsApi, sprintsApi, projectsApi, dashboardApi, type EstimatesResponse, type ProjectMetricsResponse, type Project } from '../lib/api';
 import MetricCard from '../components/MetricCard';
 import SectionCard from '../components/SectionCard';
 import { formatMinutes } from '../components/issue/WorkLogInput';
@@ -31,6 +31,16 @@ export default function ProjectDashboard() {
   const [estimatesLoading, setEstimatesLoading] = useState(false);
   const [metrics, setMetrics] = useState<ProjectMetricsResponse | null>(null);
   const [metricsLoading, setMetricsLoading] = useState(false);
+  const [project, setProject] = useState<Project | null>(null);
+
+  const getStatusColor = (statusName: string, index: number) => {
+    const status = project?.statuses?.find((s) => s.name === statusName);
+    return status?.color || STATUS_COLORS[index % STATUS_COLORS.length];
+  };
+  const getTypeColor = (typeName: string, index: number) => {
+    const issueType = project?.issueTypes?.find((t) => t.name === typeName);
+    return issueType?.color || TYPE_COLORS[index % TYPE_COLORS.length];
+  };
 
   useEffect(() => {
     if (!projectId) return;
@@ -94,6 +104,7 @@ export default function ProjectDashboard() {
         setStatusLoading(false);
         return;
       }
+      setProject(projRes.data);
       const statuses =
         projRes.data.statuses && projRes.data.statuses.length
           ? projRes.data.statuses.map((s) => s.name)
@@ -327,7 +338,7 @@ export default function ProjectDashboard() {
                       {statusData.map((entry, index) => (
                         <Cell
                           key={entry.name}
-                          fill={STATUS_COLORS[index % STATUS_COLORS.length]}
+                          fill={getStatusColor(entry.name, index)}
                         />
                       ))}
                     </Pie>
@@ -368,7 +379,7 @@ export default function ProjectDashboard() {
                       labelLine={false}
                     >
                       {metrics.issuesByType.map((entry, index) => (
-                        <Cell key={entry.name} fill={TYPE_COLORS[index % TYPE_COLORS.length]} />
+                        <Cell key={entry.name} fill={getTypeColor(entry.name, index)} />
                       ))}
                     </Pie>
                     <Tooltip />
@@ -399,12 +410,18 @@ export default function ProjectDashboard() {
                       <th className="py-2.5 pr-3 font-semibold text-[color:var(--text-muted)] bg-[color:var(--bg-surface)] sticky left-0 z-10 whitespace-nowrap">
                         Type
                       </th>
-                      {typeVsStatusPivot.statuses.map((status) => (
+                      {typeVsStatusPivot.statuses.map((status, idx) => (
                         <th
                           key={status}
                           className="py-2.5 px-2 font-semibold text-[color:var(--text-muted)] text-center min-w-[3rem]"
                         >
-                          {status}
+                          <span className="inline-flex items-center gap-1.5">
+                            <span
+                              className="w-2 h-2 rounded-full shrink-0"
+                              style={{ backgroundColor: getStatusColor(status, idx) }}
+                            />
+                            {status}
+                          </span>
                         </th>
                       ))}
                       <th className="py-2.5 pl-2 font-semibold text-[color:var(--text-muted)] text-center min-w-[3.5rem]">
@@ -413,10 +430,16 @@ export default function ProjectDashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {typeVsStatusPivot.types.map((type) => (
+                    {typeVsStatusPivot.types.map((type, typeIdx) => (
                       <tr key={type} className="border-b border-[color:var(--border-subtle)] hover:bg-[color:var(--bg-elevated)]/50">
                         <td className="py-2 pr-3 font-medium text-[color:var(--text-primary)] sticky left-0 bg-[color:var(--bg-surface)] z-10 whitespace-nowrap">
-                          {type}
+                          <span className="inline-flex items-center gap-1.5">
+                            <span
+                              className="w-2 h-2 rounded-full shrink-0"
+                              style={{ backgroundColor: getTypeColor(type, typeIdx) }}
+                            />
+                            {type}
+                          </span>
                         </td>
                         {typeVsStatusPivot.statuses.map((status) => {
                           const count = typeVsStatusPivot.map.get(`${type}|${status}`) ?? 0;
@@ -493,7 +516,7 @@ export default function ProjectDashboard() {
                         type="monotone"
                         dataKey={statusName}
                         name={statusName}
-                        stroke={STATUS_COLORS[index % STATUS_COLORS.length]}
+                        stroke={getStatusColor(statusName, index)}
                         strokeWidth={2}
                         dot={{ r: 3 }}
                       />

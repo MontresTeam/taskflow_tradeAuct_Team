@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotifications } from '../contexts/NotificationsContext';
 import { inboxApi, invitationsApi, type InboxMessage } from '../lib/api';
@@ -180,6 +180,16 @@ export default function Inbox() {
                 <div className="mt-3 text-[color:var(--text-primary)] text-xs whitespace-pre-wrap leading-relaxed">
                   {selectedMessage.body || '—'}
                 </div>
+                {selectedMessage.type === 'release_notes' && (selectedMessage.meta as { projectId?: string })?.projectId && (
+                  <div className="mt-4 pt-4 border-t border-[color:var(--border-subtle)]">
+                    <Link
+                      to={`/projects/${(selectedMessage.meta as { projectId: string }).projectId}/versions`}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-page)] text-xs text-[color:var(--text-primary)] font-medium hover:bg-[color:var(--bg-surface)] transition"
+                    >
+                      View release notes →
+                    </Link>
+                  </div>
+                )}
                 {selectedMessage.type === 'project_invitation' && selectedMessage.meta?.invitationId && (
                   <div className="mt-4 pt-4 border-t border-[color:var(--border-subtle)]">
                     {selectedMessage.meta?.status === 'accepted' ? (
