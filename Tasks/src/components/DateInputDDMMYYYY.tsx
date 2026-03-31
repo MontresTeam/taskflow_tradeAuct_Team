@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react';
-import { isoDateToDisplayDDMMYYYY, parseDDMMYYYYToIso } from '../lib/dateFormat';
+import { toIsoDatePart } from '../lib/dateFormat';
 
 interface DateInputDDMMYYYYProps {
   value: string;
@@ -22,51 +21,26 @@ export default function DateInputDDMMYYYY({
   allowEmpty = false,
   onCommit,
 }: DateInputDDMMYYYYProps) {
-  const [text, setText] = useState(() => isoDateToDisplayDDMMYYYY(value));
-
-  useEffect(() => {
-    setText(isoDateToDisplayDDMMYYYY(value));
-  }, [value]);
-
-  function commit() {
-    const trimmed = text.trim();
-    if (trimmed === '') {
-      if (allowEmpty) {
-        onChange('');
-        onCommit?.();
-        return;
-      }
-      setText(isoDateToDisplayDDMMYYYY(value));
-      onCommit?.();
-      return;
-    }
-    const iso = parseDDMMYYYYToIso(trimmed);
-    if (iso) {
-      onChange(iso);
-      setText(isoDateToDisplayDDMMYYYY(iso));
-    } else {
-      setText(isoDateToDisplayDDMMYYYY(value));
-    }
-    onCommit?.();
-  }
+  const isoValue = toIsoDatePart(value);
 
   return (
     <input
       id={id}
-      type="text"
-      inputMode="numeric"
-      placeholder="DD/MM/YYYY"
+      type="date"
       disabled={disabled}
       className={className}
-      value={text}
-      onChange={(e) => setText(e.target.value)}
-      onBlur={commit}
+      value={isoValue}
+      onChange={(e) => {
+        const next = e.target.value;
+        if (!next && !allowEmpty) return;
+        onChange(next);
+      }}
+      onBlur={() => onCommit?.()}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
           (e.target as HTMLInputElement).blur();
         }
       }}
-      autoComplete="off"
     />
   );
 }
