@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
+import { FiCheck, FiTrash2, FiX } from 'react-icons/fi';
 
 export interface ConfirmModalProps {
   open: boolean;
@@ -24,8 +25,8 @@ export default function ConfirmModal({
 
   const confirmClass =
     variant === 'danger'
-      ? 'px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium transition'
-      : 'px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition';
+      ? 'inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--bg-page)]'
+      : 'btn-primary inline-flex items-center justify-center gap-1.5';
 
   return createPortal(
     <div
@@ -42,11 +43,17 @@ export default function ConfirmModal({
           <button
             type="button"
             onClick={onCancel}
-            className="px-4 py-2 rounded-lg btn-secondary border hover:opacity-90 transition"
+            className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg btn-secondary border hover:opacity-90 transition"
           >
+            <FiX className="h-3.5 w-3.5 shrink-0" aria-hidden />
             Cancel
           </button>
           <button type="button" onClick={onConfirm} className={confirmClass}>
+            {variant === 'danger' ? (
+              <FiTrash2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            ) : (
+              <FiCheck className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            )}
             {confirmLabel}
           </button>
         </div>

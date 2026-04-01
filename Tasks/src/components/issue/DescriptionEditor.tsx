@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react';
+import type { Editor } from '@tiptap/core';
 import { useAuth } from '../../contexts/AuthContext';
+import { getFilesFromDataTransfer } from '../../lib/clipboardFiles';
 import { uploadFile } from '../../lib/api';
 import { EditorContent, useEditor } from '@tiptap/react';
 import { baseEditorExtensions, editorContentClass } from '../richText/richTextEditorExtensions';
@@ -10,6 +12,17 @@ interface DescriptionEditorProps {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+}
+
+async function insertUploadedImages(editor: Editor | null, imageFiles: File[], token: string | null | undefined) {
+  if (!editor) return;
+  for (const file of imageFiles) {
+    if (!file.type.startsWith('image/')) continue;
+    const res = await uploadFile(file, token ?? undefined);
+    if (res.success && res.data) {
+      editor.chain().focus().setImage({ src: res.data.url, alt: res.data.originalName }).run();
+    }
+  }
 }
 
 export default function DescriptionEditor({
@@ -29,22 +42,19 @@ export default function DescriptionEditor({
         ),
       },
       handleDrop(_view, event) {
-        const dt = event.dataTransfer;
-        const files = dt?.files;
-        if (!files || files.length === 0) return false;
+        const files = getFilesFromDataTransfer(event.dataTransfer);
+        const images = files.filter((f) => f.type.startsWith('image/'));
+        if (images.length === 0) return false;
         event.preventDefault();
-        const file = Array.from(files)[0];
-        if (!file?.type.startsWith('image/')) return false;
-        (async () => {
-          const res = await uploadFile(file, token || undefined);
-          if (res.success && res.data) {
-            editor
-              ?.chain()
-              .focus()
-              .setImage({ src: res.data.url, alt: res.data.originalName })
-              .run();
-          }
-        })();
+        void insertUploadedImages(editor, images, token);
+        return true;
+      },
+      handlePaste(_view, event) {
+        const files = getFilesFromDataTransfer(event.clipboardData);
+        const images = files.filter((f) => f.type.startsWith('image/'));
+        if (images.length === 0) return false;
+        event.preventDefault();
+        void insertUploadedImages(editor, images, token);
         return true;
       },
     },

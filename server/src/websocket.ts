@@ -2,6 +2,7 @@ import { Server as HttpServer } from 'http';
 import { Server, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import { env } from './config/env';
+import { toAppRelativeUrl } from './utils/notificationUrl';
 
 let io: Server | null = null;
 
@@ -80,5 +81,5 @@ export function notifyPush(
   userId: string,
   payload: { title: string; body?: string; url?: string; data?: Record<string, unknown> }
 ): void {
-  if (io) io.to(userId).emit('notification:push', payload);
+  if (io) io.to(userId).emit('notification:push', { ...payload, url: toAppRelativeUrl(payload.url) });
 }

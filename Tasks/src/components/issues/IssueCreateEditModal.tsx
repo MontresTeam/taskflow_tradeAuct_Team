@@ -20,6 +20,7 @@ export interface IssueForm {
   customFieldValues: Record<string, unknown>;
   fixVersion: string;
   affectsVersions: string[];
+  labels: string[];
 }
 
 interface IssueCreateEditModalProps {
@@ -41,13 +42,15 @@ interface IssueCreateEditModalProps {
   showProjectSelector?: boolean;
   milestones?: Milestone[];
   sprints?: Sprint[];
+  labelSuggestions?: string[];
 }
 
 export function IssueCreateEditModal(props: IssueCreateEditModalProps) {
-  const { modal, setModal, form, setForm, submitError, submitting, handleSubmit, typeList, priorityList, statusList, users, parentCandidates, project, getIssueKey, projects = [], showProjectSelector, milestones = [], sprints = [] } = props;
+  const { modal, setModal, form, setForm, submitError, submitting, handleSubmit, typeList, priorityList, statusList, users, parentCandidates, project, getIssueKey, projects = [], showProjectSelector, milestones = [], sprints = [], labelSuggestions = [] } = props;
   if (!modal) return null;
   const [affectsOpen, setAffectsOpen] = useState(false);
   const affectsRef = useRef<HTMLDivElement | null>(null);
+  const [labelInput, setLabelInput] = useState('');
 
   const inputCls =
     'w-full px-3 py-1.5 rounded-md bg-[color:var(--bg-page)] border border-[color:var(--border-subtle)] text-[color:var(--text-primary)] text-xs focus:outline-none focus:ring-1 focus:ring-[color:var(--accent)]/40 transition-colors';
@@ -64,6 +67,33 @@ export function IssueCreateEditModal(props: IssueCreateEditModalProps) {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    setLabelInput('');
+  }, [modal, form.labels]);
+
+  const normalizedSuggestions = Array.from(
+    new Set(
+      (labelSuggestions || [])
+        .map((l) => l.trim())
+        .filter(Boolean)
+    )
+  ).sort((a, b) => a.localeCompare(b));
+
+  const addLabel = (raw: string) => {
+    const next = raw.trim();
+    if (!next) return;
+    setForm((prev) => {
+      const exists = prev.labels.some((l) => l.toLowerCase() === next.toLowerCase());
+      if (exists) return prev;
+      return { ...prev, labels: [...prev.labels, next] };
+    });
+    setLabelInput('');
+  };
+
+  const removeLabel = (label: string) => {
+    setForm((prev) => ({ ...prev, labels: prev.labels.filter((l) => l !== label) }));
+  };
 
   return createPortal(
     <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm animate-fade-in p-4" onClick={() => setModal(null)}>
@@ -140,6 +170,54 @@ export function IssueCreateEditModal(props: IssueCreateEditModalProps) {
                 placeholder="Optional"
                 className={inputCls}
               />
+            </div>
+            <div className="col-span-2 min-w-0">
+              <label className="block text-xs font-medium text-[color:var(--text-primary)] mb-1">Labels</label>
+              <div className="space-y-2">
+                <input
+                  type="text"
+                  value={labelInput}
+                  onChange={(e) => setLabelInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ',') {
+                      e.preventDefault();
+                      addLabel(labelInput);
+                    }
+                    if (e.key === 'Backspace' && !labelInput && form.labels.length > 0) {
+                      e.preventDefault();
+                      removeLabel(form.labels[form.labels.length - 1]);
+                    }
+                  }}
+                  onBlur={() => {
+                    if (labelInput.trim()) addLabel(labelInput);
+                  }}
+                  placeholder="Type label and press Enter"
+                  list="issue-label-suggestions"
+                  className={inputCls}
+                />
+                <datalist id="issue-label-suggestions">
+                  {normalizedSuggestions.map((label) => (
+                    <option key={label} value={label} />
+                  ))}
+                </datalist>
+                {form.labels.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {form.labels.map((label) => (
+                      <button
+                        key={label}
+                        type="button"
+                        onClick={() => removeLabel(label)}
+                        className="inline-flex items-center gap-1 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-elevated)] px-2 py-0.5 text-[11px] text-[color:var(--text-primary)] hover:bg-[color:var(--bg-page)]"
+                        title={`Remove ${label}`}
+                      >
+                        <span>{label}</span>
+                        <span aria-hidden>×</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <p className="text-[11px] text-[color:var(--text-muted)]">Suggested from existing issues. You can also add new labels.</p>
+              </div>
             </div>
             {(typeList.includes('Epic') || typeList.includes('Story')) && (
               <div className="col-span-2">

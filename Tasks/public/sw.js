@@ -20,7 +20,16 @@ self.addEventListener('push', function (event) {
 
 self.addEventListener('notificationclick', function (event) {
   event.notification.close();
-  const url = event.notification.data?.url || '/inbox';
+  const rawUrl = event.notification.data?.url || '/inbox';
+  let url = rawUrl;
+  if (typeof rawUrl === 'string' && /^https?:\/\//i.test(rawUrl)) {
+    try {
+      const parsed = new URL(rawUrl);
+      url = `${parsed.pathname || '/'}${parsed.search || ''}${parsed.hash || ''}`;
+    } catch {
+      url = rawUrl;
+    }
+  }
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (clientList) {
       for (let i = 0; i < clientList.length; i++) {

@@ -979,6 +979,7 @@ export const issuesApi = {
       customFieldValues?: Record<string, unknown>;
       fixVersion?: string;
       affectsVersions?: string[];
+      labels?: string[];
     },
     token: string
   ) => api.post<Issue>('/issues', body, token),

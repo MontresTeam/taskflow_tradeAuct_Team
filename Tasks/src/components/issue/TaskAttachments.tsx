@@ -1,5 +1,6 @@
-import { useRef, forwardRef, useImperativeHandle } from 'react';
+import { useRef, forwardRef, useImperativeHandle, useCallback } from 'react';
 import type { Attachment } from '../../lib/api';
+import { getFilesFromDataTransfer } from '../../lib/clipboardFiles';
 import { uploadFile, attachmentsApi } from '../../lib/api';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -58,28 +59,66 @@ const TaskAttachments = forwardRef<TaskAttachmentsHandle, TaskAttachmentsProps>(
     [token]
   );
 
+  const uploadOneFile = useCallback(
+    async (file: File) => {
+      if (!token) return;
+      const res = await uploadFile(file, token);
+      if (!res.success || !res.data) {
+        alert((res as { message?: string }).message ?? 'Upload failed');
+        return;
+      }
+      const addRes = await attachmentsApi.add(
+        issueId,
+        {
+          url: res.data.url,
+          originalName: res.data.originalName,
+          mimeType: res.data.mimeType,
+          size: res.data.size,
+        },
+        token
+      );
+      if (addRes.success) onAttachmentsChange();
+      else alert((addRes as { message?: string }).message ?? 'Failed to add attachment');
+    },
+    [issueId, token, onAttachmentsChange]
+  );
+
   async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file || !token) return;
     e.target.value = '';
-    const res = await uploadFile(file, token);
-    if (!res.success || !res.data) {
-      alert((res as { message?: string }).message ?? 'Upload failed');
-      return;
-    }
-    const addRes = await attachmentsApi.add(
-      issueId,
-      {
-        url: res.data.url,
-        originalName: res.data.originalName,
-        mimeType: res.data.mimeType,
-        size: res.data.size,
-      },
-      token
-    );
-    if (addRes.success) onAttachmentsChange();
-    else alert((addRes as { message?: string }).message ?? 'Failed to add attachment');
+    await uploadOneFile(file);
   }
+
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      if (!token) return;
+      const files = getFilesFromDataTransfer(e.clipboardData);
+      if (files.length === 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      for (const f of files) void uploadOneFile(f);
+    },
+    [token, uploadOneFile]
+  );
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (!token) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  }, [token]);
+
+  const handleDropFiles = useCallback(
+    (e: React.DragEvent) => {
+      if (!token) return;
+      const files = getFilesFromDataTransfer(e.dataTransfer);
+      if (files.length === 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      for (const f of files) void uploadOneFile(f);
+    },
+    [token, uploadOneFile]
+  );
 
   async function handleRemove(a: Attachment) {
     if (!token) return;
@@ -91,7 +130,15 @@ const TaskAttachments = forwardRef<TaskAttachmentsHandle, TaskAttachmentsProps>(
     currentUserId && a.uploadedBy && typeof a.uploadedBy === 'object' && a.uploadedBy._id === currentUserId;
 
   return (
-    <div className="rounded-xl border border-[color:var(--border-subtle)]/90 bg-[color:var(--bg-surface)] p-4 shadow-sm">
+    <div
+      className="rounded-xl border border-[color:var(--border-subtle)]/90 bg-[color:var(--bg-surface)] p-4 shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent)]/35"
+      tabIndex={token ? 0 : undefined}
+      onPaste={handlePaste}
+      onDragOver={handleDragOver}
+      onDrop={handleDropFiles}
+      role={token ? 'region' : undefined}
+      aria-label={token ? 'Attachments — paste or drop files here when focused' : undefined}
+    >
       <div className="flex items-center justify-between mb-2.5">
         <h3 className="text-[10px] font-semibold text-[color:var(--text-muted)] uppercase tracking-[0.1em]">
           Attachments

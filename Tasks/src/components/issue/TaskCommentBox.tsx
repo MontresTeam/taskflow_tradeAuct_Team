@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import type { Editor } from '@tiptap/core';
 import { useAuth } from '../../contexts/AuthContext';
+import { getFilesFromDataTransfer } from '../../lib/clipboardFiles';
 import { uploadFile } from '../../lib/api';
 import { BubbleMenu, EditorContent, useEditor } from '@tiptap/react';
 import Mention from '@tiptap/extension-mention';
@@ -146,6 +148,51 @@ const AttachmentBlock = Node.create({
     };
   },
 });
+
+async function processCommentEditorFiles(
+  files: File[],
+  editor: Editor | null,
+  token: string | null | undefined,
+  setUploading: (v: boolean) => void,
+  setUploadError: (v: string | null) => void
+) {
+  if (!editor) return;
+  for (const file of files) {
+    try {
+      setUploadError(null);
+      setUploading(true);
+      const res = await uploadFile(file, token ?? undefined);
+      if (!res.success || !res.data) {
+        setUploadError((res as { message?: string }).message ?? 'Upload failed');
+        continue;
+      }
+      const { url, originalName, mimeType } = res.data;
+      if (file.type.startsWith('image/')) {
+        editor.chain().focus().setImage({ src: url, alt: originalName }).run();
+      } else if (file.type.startsWith('video/')) {
+        editor
+          .chain()
+          .focus()
+          .insertContent({
+            type: 'videoBlock',
+            attrs: { url, name: originalName },
+          })
+          .run();
+      } else {
+        editor
+          .chain()
+          .focus()
+          .insertContent({
+            type: 'attachmentBlock',
+            attrs: { url, name: originalName, mimeType },
+          })
+          .run();
+      }
+    } finally {
+      setUploading(false);
+    }
+  }
+}
 
 export default function TaskCommentBox({
   onSubmit,
@@ -314,52 +361,17 @@ export default function TaskCommentBox({
           ),
         },
         handleDrop(_view, event) {
-          const dt = event.dataTransfer;
-          const files = dt?.files;
-          if (!files || files.length === 0) return false;
+          const fileArray = getFilesFromDataTransfer(event.dataTransfer);
+          if (fileArray.length === 0) return false;
           event.preventDefault();
-          const fileArray = Array.from(files);
-          (async () => {
-            for (const file of fileArray) {
-              try {
-                setUploadError(null);
-                setUploading(true);
-                const res = await uploadFile(file, token || undefined);
-                if (!res.success || !res.data) {
-                  setUploadError((res as { message?: string }).message ?? 'Upload failed');
-                  continue;
-                }
-                const { url, originalName, mimeType } = res.data;
-                if (file.type.startsWith('image/')) {
-                  editor
-                    ?.chain()
-                    .focus()
-                    .setImage({ src: url, alt: originalName })
-                    .run();
-                } else if (file.type.startsWith('video/')) {
-                  editor
-                    ?.chain()
-                    .focus()
-                    .insertContent({
-                      type: 'videoBlock',
-                      attrs: { url, name: originalName },
-                    })
-                    .run();
-                } else {
-                  editor
-                    ?.chain()
-                    .focus()
-                    .insertContent({
-                      type: 'attachmentBlock',
-                      attrs: { url, name: originalName, mimeType },
-                    })
-                    .run();
-                }
-              } finally {
-                setUploading(false);
-              }
-            }
-          })();
+          void processCommentEditorFiles(fileArray, editor, token, setUploading, setUploadError);
+          return true;
+        },
+        handlePaste(_view, event) {
+          const fileArray = getFilesFromDataTransfer(event.clipboardData);
+          if (fileArray.length === 0) return false;
+          event.preventDefault();
+          void processCommentEditorFiles(fileArray, editor, token, setUploading, setUploadError);
           return true;
         },
       },

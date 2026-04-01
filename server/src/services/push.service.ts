@@ -1,6 +1,7 @@
 import webpush from 'web-push';
 import { PushSubscription } from '../modules/pushSubscriptions/pushSubscription.model';
 import { env } from '../config/env';
+import { toAppRelativeUrl } from '../utils/notificationUrl';
 
 export interface PushPayload {
   title: string;
@@ -27,7 +28,7 @@ export async function sendPushToUser(userId: string, payload: PushPayload): Prom
   if (!env.vapidPublicKey || !env.vapidPrivateKey) return;
   ensureVapid();
   const subscriptions = await PushSubscription.find({ user: userId }).lean();
-  const payloadStr = JSON.stringify(payload);
+  const payloadStr = JSON.stringify({ ...payload, url: toAppRelativeUrl(payload.url) });
   for (const sub of subscriptions) {
     try {
       await webpush.sendNotification(

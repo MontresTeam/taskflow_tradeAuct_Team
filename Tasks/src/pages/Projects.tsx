@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { FiArrowRight, FiChevronLeft, FiChevronRight, FiPlus, FiSave, FiX } from 'react-icons/fi';
 import { EditIcon, TrashIcon } from '../components/icons/NavigationIcons';
 import { projectsApi, usersApi, projectTemplatesApi, type Project, type User, type ProjectTemplate } from '../lib/api';
 import ConfirmModal from '../components/ConfirmModal';
@@ -143,8 +144,9 @@ export default function Projects() {
               <button
                 type="button"
                 onClick={openCreate}
-                className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] text-xs text-[color:var(--text-primary)] hover:bg-[color:var(--bg-surface)] transition"
+                className="btn-primary btn-primary-sm shadow-sm shadow-indigo-900/20 inline-flex items-center justify-center gap-1.5"
               >
+                <FiPlus className="h-3.5 w-3.5 shrink-0" aria-hidden />
                 New project
               </button>
             )}
@@ -178,9 +180,10 @@ export default function Projects() {
                 <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
                   <Link
                     to={`/projects/${p._id}/dashboard`}
-                    className="px-3 py-1.5 rounded-md text-xs border border-[color:var(--border-subtle)] text-[color:var(--text-primary)] hover:bg-[color:var(--bg-surface)]"
+                    className="inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-md text-xs border border-[color:var(--border-subtle)] text-[color:var(--text-primary)] hover:bg-[color:var(--bg-surface)]"
                   >
                     Open
+                    <FiArrowRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
                   </Link>
                   {p.canEdit && (
                     <button
@@ -214,8 +217,9 @@ export default function Projects() {
               type="button"
               disabled={page <= 1}
               onClick={() => setPage((p) => p - 1)}
-              className="px-3 py-1.5 rounded-lg btn-secondary border text-[color:var(--text-primary)] disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg btn-secondary border text-[color:var(--text-primary)] disabled:opacity-50"
             >
+              <FiChevronLeft className="h-4 w-4 shrink-0" aria-hidden />
               Previous
             </button>
             <span className="px-3 py-1.5 text-[color:var(--text-muted)] text-sm">
@@ -225,9 +229,10 @@ export default function Projects() {
               type="button"
               disabled={page >= totalPages}
               onClick={() => setPage((p) => p + 1)}
-              className="px-3 py-1.5 rounded-lg btn-secondary border text-[color:var(--text-primary)] disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg btn-secondary border text-[color:var(--text-primary)] disabled:opacity-50"
             >
               Next
+              <FiChevronRight className="h-4 w-4 shrink-0" aria-hidden />
             </button>
           </div>
         )}
@@ -346,16 +351,24 @@ export default function Projects() {
                   <button
                     type="button"
                     onClick={() => setModal(null)}
-                    className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] text-xs text-[color:var(--text-muted)] hover:bg-[color:var(--bg-page)]"
+                    className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] text-xs text-[color:var(--text-muted)] hover:bg-[color:var(--bg-page)]"
                   >
+                    <FiX className="h-3.5 w-3.5 shrink-0" aria-hidden />
                     Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-page)] text-xs text-[color:var(--text-primary)] hover:bg-[color:var(--bg-surface)] disabled:opacity-50"
+                    className="btn-primary btn-primary-sm disabled:opacity-50 inline-flex items-center justify-center gap-1.5"
                   >
-                    {submitting ? 'Saving…' : 'Save'}
+                    {submitting ? (
+                      'Saving…'
+                    ) : (
+                      <>
+                        <FiSave className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                        Save
+                      </>
+                    )}
                   </button>
                 </div>
               </form>

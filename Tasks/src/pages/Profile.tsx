@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { getFilesFromDataTransfer } from '../lib/clipboardFiles';
 import { authApi, uploadFile, projectsApi, dashboardApi, type Project, type DashboardStats } from '../lib/api';
 import { formatDateDDMMYYYY } from '../lib/dateFormat';
 
@@ -60,12 +61,11 @@ export default function Profile() {
     });
   }, [token]);
 
-  async function handleAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file || !token || !user) return;
-    e.target.value = '';
-    const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-    if (!validTypes.includes(file.type)) {
+  const avatarValidTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+
+  async function handleAvatarFile(file: File) {
+    if (!token || !user) return;
+    if (!avatarValidTypes.includes(file.type)) {
       setError('Please upload a JPEG, PNG, GIF, or WebP image');
       return;
     }
@@ -85,6 +85,34 @@ export default function Profile() {
     } else {
       setError((res as { message?: string }).message ?? 'Upload failed');
     }
+  }
+
+  function handleAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    void handleAvatarFile(file);
+  }
+
+  function handleAvatarPaste(e: React.ClipboardEvent) {
+    const files = getFilesFromDataTransfer(e.clipboardData);
+    const image = files.find((f) => avatarValidTypes.includes(f.type));
+    if (!image) return;
+    e.preventDefault();
+    void handleAvatarFile(image);
+  }
+
+  function handleAvatarDrop(e: React.DragEvent) {
+    const files = getFilesFromDataTransfer(e.dataTransfer);
+    const image = files.find((f) => avatarValidTypes.includes(f.type));
+    if (!image) return;
+    e.preventDefault();
+    void handleAvatarFile(image);
+  }
+
+  function handleAvatarDragOver(e: React.DragEvent) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
   }
 
   async function handleRemoveAvatar() {
@@ -159,7 +187,14 @@ export default function Profile() {
 
       {/* Hero / Avatar section */}
       <div className="rounded-2xl border border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] p-6 sm:p-8 flex flex-col sm:flex-row items-center gap-6">
-        <div className="relative group">
+        <div
+          className="relative group outline-none rounded-full focus-visible:ring-2 focus-visible:ring-[color:var(--accent)]/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--bg-surface)]"
+          tabIndex={0}
+          onPaste={handleAvatarPaste}
+          onDrop={handleAvatarDrop}
+          onDragOver={handleAvatarDragOver}
+          aria-label="Profile photo — paste or drop an image when focused"
+        >
           <div className="w-28 h-28 rounded-full overflow-hidden bg-[color:var(--bg-page)] border-2 border-[color:var(--border-subtle)] flex items-center justify-center text-2xl font-semibold text-[color:var(--text-muted)] shrink-0">
             {avatarFullUrl ? (
               <img src={avatarFullUrl} alt="" className="w-full h-full object-cover" />

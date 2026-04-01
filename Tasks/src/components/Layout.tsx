@@ -2,6 +2,7 @@ import { NavLink, useNavigate, useLocation, useParams, Link } from 'react-router
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotifications } from '../contexts/NotificationsContext';
+import { toAppPath } from '../lib/navigationUrl';
 import NotificationToast from './NotificationToast';
 import { projectsApi, issuesApi, type Project, type Issue, getIssueKey } from '../lib/api';
 import {
@@ -402,7 +403,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                       <ul className="divide-y divide-[color:var(--border-subtle)]/70">
                         {notifications.slice(0, 20).map((n) => {
                           const isUnread = !n.readAt;
-                          const href = n.url && n.url.startsWith('http') ? n.url : (n.url || '');
+                          const href = toAppPath(n.url || '');
                           return (
                             <li key={n._id} className={`px-4 py-3 hover:bg-[color:var(--bg-surface)] transition ${isUnread ? 'bg-[color:var(--bg-surface)]/40' : ''}`}>
                               <Link

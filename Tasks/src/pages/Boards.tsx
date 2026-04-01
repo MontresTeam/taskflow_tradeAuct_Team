@@ -177,23 +177,23 @@ function BoardCard({
           <path d="M5 3a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm6 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM5 9a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm6 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM5 12a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm6 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z" />
         </svg>
       </button>
-      <div className="flex-1 min-w-0 flex flex-col gap-2">
-        <Link
-          to={`/projects/${projectId}/issues/${encodeURIComponent(getIssueKeyFn(issue))}`}
-          className="block p-3 rounded-lg bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] hover:bg-[color:var(--bg-elevated)] text-left transition"
-        >
-          <p className="text-[11px] font-mono text-[color:var(--text-muted)]">{getIssueKeyFn(issue)}</p>
-          <p className="text-sm font-medium text-[color:var(--text-primary)] truncate">{issue.title}</p>
-          <div className="flex flex-wrap items-center gap-1.5 mt-1">
-            <MetaBadge label={issue.type} meta={getTypeMeta(issue.type)} />
-            <MetaBadge label={issue.priority} meta={getPriorityMeta(issue.priority)} />
-            {issue.storyPoints != null && (
-              <span className="text-[10px] text-[color:var(--text-muted)]">{issue.storyPoints} SP</span>
-            )}
-          </div>
-        </Link>
-        {onToggleWatch && (
-          <div className="px-3 pb-2">
+      <div className="flex-1 min-w-0 rounded-lg bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] hover:bg-[color:var(--bg-elevated)] transition">
+        <div className="flex items-start gap-2 p-3">
+          <Link
+            to={`/projects/${projectId}/issues/${encodeURIComponent(getIssueKeyFn(issue))}`}
+            className="min-w-0 flex-1 block text-left"
+          >
+            <p className="text-[11px] font-mono text-[color:var(--text-muted)]">{getIssueKeyFn(issue)}</p>
+            <p className="text-sm font-medium text-[color:var(--text-primary)] truncate">{issue.title}</p>
+            <div className="flex flex-wrap items-center gap-1.5 mt-1">
+              <MetaBadge label={issue.type} meta={getTypeMeta(issue.type)} />
+              <MetaBadge label={issue.priority} meta={getPriorityMeta(issue.priority)} />
+              {issue.storyPoints != null && (
+                <span className="text-[10px] text-[color:var(--text-muted)]">{issue.storyPoints} SP</span>
+              )}
+            </div>
+          </Link>
+          {onToggleWatch && (
             <WatchButton
               watching={watching ?? false}
               loading={watchingLoading ?? false}
@@ -201,8 +201,8 @@ function BoardCard({
               onUnwatch={onToggleWatch}
               size="sm"
             />
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
