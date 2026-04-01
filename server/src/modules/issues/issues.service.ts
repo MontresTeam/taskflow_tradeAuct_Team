@@ -12,7 +12,7 @@ import { notifyPush, notifyProjectRefresh } from '../../websocket';
 import { env } from '../../config/env';
 import * as notificationsService from '../notifications/notifications.service';
 import * as watchersService from '../watchers/watchers.service';
-import { getClosedStatusNamesForProject } from '../projects/statusClassification';
+import { getClosedStatusNamesForProject, getClosedStatusNamesFromStatuses } from '../projects/statusClassification';
 
 const DEFAULT_STATUS = 'Backlog';
 
@@ -138,11 +138,26 @@ export async function findAll(
     filter.project = projectIds.length === 1 ? projectIds[0] : { $in: projectIds };
   }
   const statusArr = toArr(filters.status);
+  let statusExcludeArr = toArr(filters.statusExclude);
+  if (!statusArr.length && statusExcludeArr.length && projectArr.length > 0) {
+    const projects = await Project.find({ _id: { $in: projectArr } }).select('statuses').lean();
+    const fromDb = new Set<string>();
+    for (const p of projects) {
+      let names = getClosedStatusNamesFromStatuses((p as { statuses?: Array<{ name?: string; isClosed?: boolean }> }).statuses);
+      if (names.length === 0) names = ['Done', 'Closed', 'Resolved'];
+      names.forEach((n) => fromDb.add(n));
+    }
+    statusExcludeArr = [...new Set([...statusExcludeArr, ...fromDb])];
+  }
   if (statusArr.length) {
     filter.status = statusArr.length === 1 ? statusArr[0] : { $in: statusArr };
-  } else {
-    const statusExcludeArr = toArr(filters.statusExclude);
-    if (statusExcludeArr.length) filter.status = { $nin: statusExcludeArr };
+  } else if (statusExcludeArr.length) {
+    const lowered = [...new Set(statusExcludeArr.map((s) => s.trim().toLowerCase()).filter(Boolean))];
+    filter.$expr = {
+      $not: {
+        $in: [{ $toLower: { $ifNull: ['$status', ''] } }, lowered],
+      },
+    };
   }
   const assigneeArr = toArr(filters.assignee);
   if (assigneeArr.length) filter.assignee = assigneeArr.length === 1 ? assigneeArr[0] : { $in: assigneeArr };

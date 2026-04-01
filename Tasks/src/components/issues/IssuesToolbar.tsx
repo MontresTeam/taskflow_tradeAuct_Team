@@ -1,5 +1,18 @@
+import {
+  FiBookmark,
+  FiCode,
+  FiColumns,
+  FiDownload,
+  FiFilter,
+  FiLayout,
+  FiList,
+  FiPlus,
+  FiSliders,
+} from 'react-icons/fi';
 import { issuesApi } from '../../lib/api';
 import type { ViewModeValue } from './constants';
+
+const iconSm = 'h-3.5 w-3.5 shrink-0';
 
 type FilterDropdownKey = 'status' | 'type' | 'priority' | 'assignee' | 'reporter' | 'labels' | 'storyPoints' | 'project';
 
@@ -49,24 +62,27 @@ export function IssuesToolbar({
             type="button"
             onClick={() => updateUrl({ viewMode: 'table' })}
             title="View: Table"
-            className={`px-4 py-2 text-xs ${viewMode === 'table' ? 'bg-[color:var(--bg-page)] text-[color:var(--text-primary)]' : 'text-[color:var(--text-muted)] hover:bg-[color:var(--bg-page)]'}`}
+            className={`inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs ${viewMode === 'table' ? 'bg-[color:var(--bg-page)] text-[color:var(--text-primary)]' : 'text-[color:var(--text-muted)] hover:bg-[color:var(--bg-page)]'}`}
           >
+            <FiLayout className={iconSm} aria-hidden />
             Table
           </button>
           <button
             type="button"
             onClick={() => updateUrl({ viewMode: 'list' })}
             title="View: List"
-            className={`px-4 py-2 text-xs ${viewMode === 'list' ? 'bg-[color:var(--bg-page)] text-[color:var(--text-primary)]' : 'text-[color:var(--text-muted)] hover:bg-[color:var(--bg-page)]'}`}
+            className={`inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs ${viewMode === 'list' ? 'bg-[color:var(--bg-page)] text-[color:var(--text-primary)]' : 'text-[color:var(--text-muted)] hover:bg-[color:var(--bg-page)]'}`}
           >
+            <FiList className={iconSm} aria-hidden />
             List
           </button>
           <button
             type="button"
             onClick={() => updateUrl({ viewMode: 'kanban' })}
             title="View: Kanban"
-            className={`px-4 py-2 text-xs ${viewMode === 'kanban' ? 'bg-[color:var(--bg-page)] text-[color:var(--text-primary)]' : 'text-[color:var(--text-muted)] hover:bg-[color:var(--bg-page)]'}`}
+            className={`inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs ${viewMode === 'kanban' ? 'bg-[color:var(--bg-page)] text-[color:var(--text-primary)]' : 'text-[color:var(--text-muted)] hover:bg-[color:var(--bg-page)]'}`}
           >
+            <FiColumns className={iconSm} aria-hidden />
             Kanban
           </button>
         </div>
@@ -78,6 +94,7 @@ export function IssuesToolbar({
               className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] text-xs text-[color:var(--text-muted)] hover:bg-[color:var(--bg-page)] hover:text-[color:var(--text-primary)] transition"
               title="Customize columns"
             >
+              <FiSliders className={iconSm} aria-hidden />
               Columns
             </button>
           </div>
@@ -92,6 +109,7 @@ export function IssuesToolbar({
                 : 'bg-[color:var(--bg-surface)] border-[color:var(--border-subtle)] text-[color:var(--text-muted)] hover:bg-[color:var(--bg-page)] hover:text-[color:var(--text-primary)]'
             }`}
           >
+            <FiFilter className={iconSm} aria-hidden />
             Filter
             {activeFilterCount > 0 && (
               <span className="min-w-[1.25rem] h-5 px-1 rounded-full border border-[color:var(--accent)] text-[10px] font-medium text-[color:var(--text-primary)] flex items-center justify-center">
@@ -112,6 +130,7 @@ export function IssuesToolbar({
                 : 'bg-[color:var(--bg-surface)] border-[color:var(--border-subtle)] text-[color:var(--text-muted)] cursor-not-allowed opacity-60'
             }`}
           >
+            <FiBookmark className={iconSm} aria-hidden />
             Save filter
           </button>
         </div>
@@ -126,6 +145,7 @@ export function IssuesToolbar({
             }`}
             title='JQL: project = X, status = Done, assignee = me, text ~ "search", order by created DESC'
           >
+            <FiCode className={iconSm} aria-hidden />
             Advanced search
             {useJql && (
               <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-[color:var(--accent)]/20 text-[color:var(--accent)]">
@@ -159,15 +179,17 @@ export function IssuesToolbar({
               alert(res.message ?? 'Export failed');
             }
           }}
-          className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] text-xs text-[color:var(--text-primary)] hover:bg-[color:var(--bg-page)]"
+          className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] text-xs text-[color:var(--text-primary)] hover:bg-[color:var(--bg-page)]"
         >
+          <FiDownload className={iconSm} aria-hidden />
           Export Excel
         </button>
         <button
           type="button"
           onClick={() => openCreate()}
-          className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] text-xs text-[color:var(--text-primary)] hover:bg-[color:var(--bg-page)]"
+          className="btn-primary btn-primary-sm shadow-sm shadow-indigo-900/20 inline-flex items-center justify-center gap-1.5"
         >
+          <FiPlus className={iconSm} aria-hidden />
           New issue
         </button>
       </div>

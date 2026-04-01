@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { useEffect } from 'react';
+import { toAppPath } from '../lib/navigationUrl';
 
 export interface NotificationToastProps {
   title: string;
@@ -22,14 +23,7 @@ export default function NotificationToast({
     return () => clearTimeout(t);
   }, [autoDismissMs, onDismiss]);
 
-  let path = url || '/inbox';
-  if (url?.startsWith('http')) {
-    try {
-      path = new URL(url).pathname;
-    } catch {
-      path = url;
-    }
-  }
+  const path = toAppPath(url) || '/inbox';
 
   const content = (
     <div className="flex flex-col gap-0.5 min-w-0">

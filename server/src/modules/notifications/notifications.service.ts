@@ -1,5 +1,6 @@
 import { Notification, type NotificationType } from './notification.model';
 import { notifyInAppNotification } from '../../websocket';
+import { toAppRelativeUrl } from '../../utils/notificationUrl';
 
 export async function listForUser(params: {
   userId: string;
@@ -56,12 +57,13 @@ export async function createNotification(params: {
   url?: string;
   meta?: Record<string, unknown>;
 }) {
+  const normalizedUrl = toAppRelativeUrl(params.url);
   const doc = await Notification.create({
     toUser: params.toUser,
     type: params.type,
     title: params.title,
     body: params.body ?? '',
-    url: params.url ?? '',
+    url: normalizedUrl,
     meta: params.meta,
   });
   const payload = doc.toObject();

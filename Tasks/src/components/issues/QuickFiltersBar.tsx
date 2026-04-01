@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
+import { FiBookmark, FiChevronDown, FiEye, FiGrid, FiUser, FiX } from 'react-icons/fi';
 import type { QuickFilterValue } from './constants';
+
+const qfIcon = 'h-3.5 w-3.5 shrink-0';
 
 export interface SavedFilter {
   id: string;
@@ -63,34 +66,37 @@ export function QuickFiltersBar({
         <button
           type="button"
           onClick={() => updateUrl({ quickFilter: 'my', page: 1 })}
-          className={`px-3 py-1.5 text-xs transition ${
+          className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs transition ${
             quickFilter === 'my'
               ? 'bg-[color:var(--bg-page)] text-[color:var(--text-primary)]'
               : 'text-[color:var(--text-muted)] hover:bg-[color:var(--bg-page)]'
           }`}
         >
+          <FiUser className={qfIcon} aria-hidden />
           My open issues
         </button>
         <button
           type="button"
           onClick={() => updateUrl({ quickFilter: 'open', page: 1 })}
-          className={`px-3 py-1.5 text-xs transition ${
+          className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs transition ${
             quickFilter === 'open'
               ? 'bg-[color:var(--bg-page)] text-[color:var(--text-primary)]'
               : 'text-[color:var(--text-muted)] hover:bg-[color:var(--bg-page)]'
           }`}
         >
+          <FiEye className={qfIcon} aria-hidden />
           Open issues
         </button>
         <button
           type="button"
           onClick={() => updateUrl({ quickFilter: 'all', page: 1 })}
-          className={`px-3 py-1.5 text-xs transition ${
+          className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs transition ${
             quickFilter === 'all'
               ? 'bg-[color:var(--bg-page)] text-[color:var(--text-primary)]'
               : 'text-[color:var(--text-muted)] hover:bg-[color:var(--bg-page)]'
           }`}
         >
+          <FiGrid className={qfIcon} aria-hidden />
           All issues
         </button>
       </div>
@@ -108,7 +114,9 @@ export function QuickFiltersBar({
             onClick={() => setSavedDropdownOpen((o) => !o)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] text-[color:var(--text-primary)] text-xs hover:bg-[color:var(--bg-page)]"
           >
-            Saved ({savedFilters.length}) <span className="text-[10px]">{savedDropdownOpen ? '▲' : '▼'}</span>
+            <FiBookmark className={qfIcon} aria-hidden />
+            Saved ({savedFilters.length})
+            <FiChevronDown className={`${qfIcon} transition ${savedDropdownOpen ? '-rotate-180' : ''}`} aria-hidden />
           </button>
           {savedDropdownOpen && (
             <div className="absolute left-0 top-full z-20 mt-1 py-1 min-w-[180px] rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--bg-elevated)] shadow-xl max-h-64 overflow-y-auto">
@@ -133,10 +141,10 @@ export function QuickFiltersBar({
                       e.stopPropagation();
                       removeSavedFilter(sf.id);
                     }}
-                    className="text-[color:var(--text-muted)] hover:text-red-500 text-sm leading-none opacity-0 group-hover:opacity-100 transition"
+                    className="inline-flex items-center justify-center p-0.5 rounded text-[color:var(--text-muted)] hover:text-red-500 opacity-0 group-hover:opacity-100 transition"
                     aria-label={`Remove ${sf.name}`}
                   >
-                    ×
+                    <FiX className="h-3.5 w-3.5" aria-hidden />
                   </button>
                 </div>
               ))}

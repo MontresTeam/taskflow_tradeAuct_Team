@@ -106,6 +106,7 @@ export default function Issues() {
     customFieldValues: {} as Record<string, unknown>,
     fixVersion: '',
     affectsVersions: [] as string[],
+    labels: [] as string[],
   });
   const [submitError, setSubmitError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -249,6 +250,8 @@ export default function Issues() {
   const allLabels = useMemo(() => [...new Set(issues.flatMap((i) => i.labels || []))].sort(), [issues]);
   const limit = 25;
 
+  const LEGACY_CLOSED_STATUSES = ['Done', 'Closed', 'Resolved'];
+
   function isClosedStatus(status: { name: string; isClosed?: boolean }): boolean {
     if (status.isClosed !== undefined) return Boolean(status.isClosed);
     const l = (status.name ?? '').trim().toLowerCase();
@@ -268,10 +271,11 @@ export default function Issues() {
       project: projectId!,
     };
     if (quickFilter === 'open' || quickFilter === 'my') {
-      const closedStatuses = project?.statuses?.length
+      let closedStatuses = project?.statuses?.length
         ? project.statuses.filter((s) => isClosedStatus(s)).map((s) => s.name).filter(Boolean)
         : statusList.filter((s) => isClosedStatus({ name: String(s) }));
-      if (closedStatuses.length > 0) params.statusExclude = closedStatuses.join(',');
+      if (closedStatuses.length === 0) closedStatuses = [...LEGACY_CLOSED_STATUSES];
+      params.statusExclude = closedStatuses.join(',');
     }
     else {
       if (filters.status.length) params.status = filters.status.join(',');
@@ -500,6 +504,7 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
       customFieldValues: {},
       fixVersion: '',
       affectsVersions: [],
+      labels: [],
     });
     setEditIssue(null);
     setSubmitError('');
@@ -523,6 +528,7 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
       customFieldValues: { ...(issue.customFieldValues ?? {}) },
       fixVersion: issue.fixVersion ?? '',
       affectsVersions: issue.affectsVersions ?? [],
+      labels: issue.labels ?? [],
     });
     setSubmitError('');
     setModal('edit');
@@ -648,6 +654,7 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
           customFieldValues: Object.keys(form.customFieldValues).length ? form.customFieldValues : undefined,
           fixVersion: form.fixVersion || undefined,
           affectsVersions: form.affectsVersions.length ? form.affectsVersions : undefined,
+          labels: form.labels.length ? form.labels : undefined,
         },
         token
       );
@@ -678,6 +685,7 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
           customFieldValues: form.customFieldValues,
           fixVersion: form.fixVersion || undefined,
           affectsVersions: form.affectsVersions.length ? form.affectsVersions : undefined,
+          labels: form.labels,
         },
         token
       );
@@ -888,6 +896,7 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
         getIssueKey={getIssueKey}
         milestones={milestones}
         sprints={sprints}
+          labelSuggestions={allLabels}
       />
 
       <BulkEditModal

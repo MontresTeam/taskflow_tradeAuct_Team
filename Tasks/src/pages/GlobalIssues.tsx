@@ -102,6 +102,7 @@ export default function GlobalIssues() {
     customFieldValues: {} as Record<string, unknown>,
     fixVersion: '',
     affectsVersions: [] as string[],
+    labels: [] as string[],
   });
   const [submitError, setSubmitError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -197,6 +198,8 @@ export default function GlobalIssues() {
   const allLabels = useMemo(() => [...new Set(issues.flatMap((i) => i.labels || []))].sort(), [issues]);
   const limit = 25;
 
+  const LEGACY_CLOSED_STATUSES = ['Done', 'Closed', 'Resolved'];
+
   function isClosedStatus(status: { name: string; isClosed?: boolean }): boolean {
     if (status.isClosed !== undefined) return Boolean(status.isClosed);
     const l = (status.name ?? '').trim().toLowerCase();
@@ -222,10 +225,11 @@ export default function GlobalIssues() {
           if (isClosedStatus(status)) closedStatusSet.add(status.name);
         });
       });
-      const closedStatuses = closedStatusSet.size > 0
+      let closedStatuses = closedStatusSet.size > 0
         ? Array.from(closedStatusSet)
         : statusList.filter((s) => isClosedStatus({ name: String(s) }));
-      if (closedStatuses.length > 0) params.statusExclude = closedStatuses.join(',');
+      if (closedStatuses.length === 0) closedStatuses = [...LEGACY_CLOSED_STATUSES];
+      params.statusExclude = closedStatuses.join(',');
     }
     else {
       if (filters.status.length) params.status = filters.status.join(',');
@@ -368,6 +372,7 @@ export default function GlobalIssues() {
       customFieldValues: {},
       fixVersion: '',
       affectsVersions: [],
+      labels: [],
     });
     setEditIssue(null);
     setSubmitError('');
@@ -392,6 +397,7 @@ export default function GlobalIssues() {
       customFieldValues: { ...(issue.customFieldValues ?? {}) },
       fixVersion: issue.fixVersion ?? '',
       affectsVersions: issue.affectsVersions ?? [],
+      labels: issue.labels ?? [],
     });
     setSubmitError('');
     setModal('edit');
@@ -517,6 +523,7 @@ export default function GlobalIssues() {
           customFieldValues: Object.keys(form.customFieldValues).length ? form.customFieldValues : undefined,
           fixVersion: form.fixVersion || undefined,
           affectsVersions: form.affectsVersions.length ? form.affectsVersions : undefined,
+          labels: form.labels.length ? form.labels : undefined,
         },
         token
       );
@@ -547,6 +554,7 @@ export default function GlobalIssues() {
           customFieldValues: form.customFieldValues,
           fixVersion: form.fixVersion || undefined,
           affectsVersions: form.affectsVersions.length ? form.affectsVersions : undefined,
+          labels: form.labels,
         },
         token
       );
@@ -752,6 +760,7 @@ export default function GlobalIssues() {
         showProjectSelector
         milestones={milestones}
         sprints={sprints}
+            labelSuggestions={allLabels}
       />
 
       <BulkEditModal

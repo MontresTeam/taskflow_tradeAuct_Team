@@ -1,11 +1,23 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import {
+  FiCornerDownRight,
+  FiGitMerge,
+  FiLink,
+  FiPaperclip,
+  FiPlus,
+} from 'react-icons/fi';
 import type { Issue } from '../../lib/api';
 import { getIssueKey } from '../../lib/api';
 import { MetaBadge } from '../MetaBadge';
 
 const actionBtnClass =
-  'inline-flex items-center justify-center text-center text-[11px] font-medium px-2.5 py-1.5 rounded-md border border-[color:var(--border-subtle)] text-[color:var(--text-primary)] bg-[color:var(--bg-elevated)]/50 hover:bg-[color:var(--bg-elevated)] hover:border-[color:var(--text-muted)]/25 transition-colors disabled:opacity-40 disabled:pointer-events-none';
+  'inline-flex items-center justify-center gap-1.5 text-center text-[11px] font-medium px-2.5 py-1.5 rounded-md border border-[color:var(--border-subtle)] text-[color:var(--text-primary)] bg-[color:var(--bg-elevated)]/50 hover:bg-[color:var(--bg-elevated)] hover:border-[color:var(--text-muted)]/25 transition-colors disabled:opacity-40 disabled:pointer-events-none';
+
+const primaryIssueActionClass =
+  'btn-primary btn-primary-sm font-medium shadow-sm shadow-indigo-900/15 text-[11px] inline-flex items-center justify-center gap-1.5';
+
+const actionIcon = 'h-3.5 w-3.5 shrink-0';
 
 interface TaskHeaderProps {
   issue: Issue;
@@ -101,13 +113,15 @@ export default function TaskHeader({
         {projectId ? (
           <Link
             to={`/projects/${projectId}/issues?create=1`}
-            className={actionBtnClass}
+            className={primaryIssueActionClass}
           >
-            + New issue
+            <FiPlus className={actionIcon} aria-hidden />
+            New issue
           </Link>
         ) : (
-          <button type="button" disabled className={actionBtnClass} title="Project context required">
-            + New issue
+          <button type="button" disabled className={primaryIssueActionClass} title="Project context required">
+            <FiPlus className={actionIcon} aria-hidden />
+            New issue
           </button>
         )}
         {projectId ? (
@@ -115,11 +129,13 @@ export default function TaskHeader({
             to={`/projects/${projectId}/issues?create=1&parent=${issueId}`}
             className={actionBtnClass}
           >
-            + Add sub-work item
+            <FiCornerDownRight className={actionIcon} aria-hidden />
+            Add sub-work item
           </Link>
         ) : (
           <button type="button" disabled className={actionBtnClass} title="Project context required">
-            + Add sub-work item
+            <FiCornerDownRight className={actionIcon} aria-hidden />
+            Add sub-work item
           </button>
         )}
         <button
@@ -129,6 +145,7 @@ export default function TaskHeader({
           title={!canLinkAndAttach ? 'Sign in required' : 'Link another issue (blocks, relates, etc.)'}
           onClick={() => onOpenLinkModal?.()}
         >
+          <FiGitMerge className={actionIcon} aria-hidden />
           Add relation
         </button>
         <button
@@ -138,6 +155,7 @@ export default function TaskHeader({
           title={!canLinkAndAttach ? 'Sign in required' : 'Link another issue'}
           onClick={() => onOpenLinkModal?.()}
         >
+          <FiLink className={actionIcon} aria-hidden />
           Add link
         </button>
         <button
@@ -147,6 +165,7 @@ export default function TaskHeader({
           title={!canLinkAndAttach ? 'Sign in required' : 'Attach a file'}
           onClick={() => onAttach?.()}
         >
+          <FiPaperclip className={actionIcon} aria-hidden />
           Attach
         </button>
       </div>

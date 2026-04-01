@@ -4,6 +4,10 @@ import { marked } from 'marked';
 export function isHtmlStored(s: string): boolean {
   const t = s.trim();
   if (!t.startsWith('<')) return false;
+  // TipTap block Image serializes as a bare <img …> (no wrapping <p>), so image-only
+  // descriptions must still be treated as stored HTML, not markdown.
+  if (/^(<img[\s/>]|<video[\s/>]|<iframe[\s/>]|<table[\s/>]|<hr[\s/>]|<figure[\s/>])/i.test(t)) return true;
+  if (/data-video-block|data-attachment-block/i.test(t)) return true;
   return /^(<p[\s/>]|<h[1-6][\s/>]|<div[\s/>]|<ul[\s/>]|<ol[\s/>]|<blockquote[\s/>]|<table[\s/>]|<pre[\s/>]|<hr[\s/>])/i.test(
     t
   );
