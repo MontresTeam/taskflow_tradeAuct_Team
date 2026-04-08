@@ -34,3 +34,11 @@ export async function markAllNotificationsRead(req: Request, res: Response): Pro
   res.status(200).json({ success: true, data: result });
 }
 
+export async function deleteNotification(req: Request, res: Response): Promise<void> {
+  const userId = req.user?.id;
+  if (!userId) throw new ApiError(401, 'Unauthorized');
+  const deleted = await notificationsService.deleteForUser(req.params.id, userId);
+  if (!deleted) throw new ApiError(404, 'Notification not found');
+  res.status(200).json({ success: true, data: { deleted: true } });
+}
+

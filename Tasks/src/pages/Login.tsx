@@ -62,16 +62,17 @@ export default function Login() {
   }, [oauthCode, oauthState, microsoftSso, msRedirectUri, navigate]);
 
   async function startMicrosoftLogin() {
-    setError('');
     setSsoLoading(true);
     const res = await authApi.microsoftSsoAuthorizeUrl(msRedirectUri);
     setSsoLoading(false);
-    if (!res.success || !res.data) {
-      setError((res as { message?: string }).message ?? 'Microsoft SSO URL generation failed');
+    if (!res.success || !res.data?.url) {
+      setError('Could not start Microsoft sign-in. Please try again.');
       return;
     }
-    sessionStorage.setItem('ms_oauth_state', res.data.state);
-    window.location.assign(res.data.url);
+    if (res.data.state) {
+      sessionStorage.setItem('ms_oauth_state', res.data.state);
+    }
+    window.location.href = res.data.url;
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -81,12 +82,16 @@ export default function Login() {
     const result = await login(email, password);
     setLoading(false);
     if (result.ok) {
-      const stored = localStorage.getItem('pm_user');
-      const u = stored ? (JSON.parse(stored) as { mustChangePassword?: boolean }) : null;
-      navigate(u?.mustChangePassword ? '/inbox' : '/');
+      if (result.userType === 'customer') {
+        navigate('/portal');
+      } else {
+        const stored = localStorage.getItem('pm_user');
+        const u = stored ? (JSON.parse(stored) as { mustChangePassword?: boolean }) : null;
+        navigate(u?.mustChangePassword ? '/inbox' : '/');
+      }
       return;
     }
-    else setError(result.error ?? 'Login failed');
+    setError(result.error ?? 'Login failed');
   }
 
   return (
@@ -213,7 +218,7 @@ export default function Login() {
               </button>
 
               <p className="mt-6 text-center text-sm text-[color:var(--text-muted)]">
-                <Link to="/forgot-password" className="font-medium text-[color:var(--accent)] hover:underline">
+                <Link to="/forgot-password" title="Reset your password" className="font-medium text-[color:var(--accent)] hover:underline">
                   Forgot password?
                 </Link>
               </p>

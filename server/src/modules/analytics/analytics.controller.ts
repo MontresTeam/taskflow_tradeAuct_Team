@@ -1,11 +1,16 @@
 import { Request, Response } from 'express';
 import type { AuthPayload } from '../../types/express';
 import { ApiError } from '../../utils/ApiError';
+import { userHasPermission } from '../../shared/constants/legacyPermissionMap';
+import { TASK_FLOW_PERMISSIONS } from '../../shared/constants/permissions';
 import * as analyticsService from './analytics.service';
 
 export async function getUsage(req: Request & { user?: AuthPayload }, res: Response): Promise<void> {
   if (!req.user) throw new ApiError(401, 'Unauthorized');
-  if (req.user.role !== 'admin' && !req.user.permissions?.includes('analytics:view')) {
+  if (
+    req.user.role !== 'admin' &&
+    !userHasPermission(req.user.permissions ?? [], TASK_FLOW_PERMISSIONS.TASKFLOW.ANALYTICS.VIEW)
+  ) {
     throw new ApiError(403, 'Access denied');
   }
 

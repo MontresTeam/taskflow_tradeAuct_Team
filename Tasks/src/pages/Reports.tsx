@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { FiTrash2, FiPlus, FiPlay } from 'react-icons/fi';
 import { useAuth } from '../contexts/AuthContext';
+import { userHasPermission } from '../utils/permissions';
+import { TASK_FLOW_PERMISSIONS } from '@shared/constants/permissions';
 import {
   reportsApi,
   projectsApi,
@@ -209,7 +211,8 @@ export default function ReportsPage() {
     }
   }
 
-  if (user?.permissions && !user.permissions.includes('reports:view')) {
+  const tfPerms = user?.permissions ?? [];
+  if (tfPerms.length && !userHasPermission(tfPerms, TASK_FLOW_PERMISSIONS.TASKFLOW.REPORT.READ)) {
     return (
       <div className="p-8">
         <p className="text-[color:var(--text-muted)]">Access denied.</p>
@@ -227,7 +230,7 @@ export default function ReportsPage() {
     <div className="flex-1 min-h-0 flex flex-col p-6">
       <div className="mb-4 flex shrink-0 items-center justify-between">
         <h1 className="text-lg font-semibold text-[color:var(--text-primary)]">Custom Reports</h1>
-        {user?.permissions?.includes('reports:create') && (
+        {userHasPermission(user?.permissions ?? [], TASK_FLOW_PERMISSIONS.TASKFLOW.REPORT.CREATE) && (
           <button
             type="button"
             onClick={() => setShowCreate(true)}
@@ -238,7 +241,7 @@ export default function ReportsPage() {
         )}
       </div>
 
-      {showCreate && user?.permissions?.includes('reports:create') && (
+      {showCreate && userHasPermission(user?.permissions ?? [], TASK_FLOW_PERMISSIONS.TASKFLOW.REPORT.CREATE) && (
         <div className="mb-6 rounded-2xl bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] p-6">
           <h2 className="text-sm font-semibold text-[color:var(--text-primary)] mb-4">Create report</h2>
           <form onSubmit={handleCreate} className="space-y-4">
@@ -453,7 +456,7 @@ export default function ReportsPage() {
                       >
                         <FiPlay className="w-4 h-4" />
                       </button>
-                      {user?.permissions?.includes('reports:create') && (
+                      {userHasPermission(user?.permissions ?? [], TASK_FLOW_PERMISSIONS.TASKFLOW.REPORT.CREATE) && (
                         <button
                           type="button"
                           onClick={() => handleDelete(r)}

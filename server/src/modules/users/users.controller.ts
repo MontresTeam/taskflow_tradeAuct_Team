@@ -2,8 +2,11 @@ import { Request, Response } from 'express';
 import { asyncHandler } from '../../utils/asyncHandler';
 import { validate } from '../../middleware/validate';
 import { usersValidation } from './users.validation';
+
 import * as usersService from './users.service';
 import { ApiError } from '../../utils/ApiError';
+import { userHasPermission } from '../../shared/constants/legacyPermissionMap';
+import { TASK_FLOW_PERMISSIONS } from '../../shared/constants/permissions';
 
 export async function getUsers(req: Request, res: Response): Promise<void> {
   const page = parseInt(String(req.query.page), 10) || 1;
@@ -22,7 +25,7 @@ export async function updateUser(req: Request, res: Response): Promise<void> {
   const userId = req.user?.id;
   if (!userId) throw new ApiError(401, 'Unauthorized');
   const permissions = req.user?.permissions ?? [];
-  const hasEditPermission = permissions.includes('users:edit');
+  const hasEditPermission = userHasPermission(permissions, TASK_FLOW_PERMISSIONS.AUTH.USER.UPDATE);
   const user = await usersService.update(req.params.id, req.body, userId, hasEditPermission);
   if (!user) throw new ApiError(404, 'User not found');
   res.status(200).json({ success: true, data: user });
@@ -32,6 +35,19 @@ export async function inviteUser(req: Request, res: Response): Promise<void> {
   const data = await usersService.invite(req.body);
   res.status(201).json({ success: true, data });
 }
+
+export async function updatePermissionOverrides(req: Request, res: Response): Promise<void> {
+  const { granted, revoked } = req.body as { granted: string[]; revoked: string[] };
+  const user = await usersService.updatePermissionOverrides(req.params.id, { granted, revoked });
+  if (!user) throw new ApiError(404, 'User not found');
+  res.status(200).json({ success: true, data: user });
+}
+
+export const updatePermissionOverridesHandler = [
+  validate(usersValidation.updatePermissionOverrides.shape.params, 'params'),
+  validate(usersValidation.updatePermissionOverrides.shape.body, 'body'),
+  asyncHandler(updatePermissionOverrides),
+];
 
 export const updateUserHandler = [
   validate(usersValidation.updateUser.shape.params, 'params'),

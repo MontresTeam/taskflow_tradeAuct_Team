@@ -5,12 +5,17 @@ import type { PaginationOptions, PaginatedResult } from '../projects/projects.se
 export async function create(
   issueId: string,
   authorId: string,
-  body: string
+  body: string,
+  opts: { portalHighlighted?: boolean; portalAuthorName?: string; customerRequestId?: string } = {}
 ): Promise<unknown> {
+  const plainText = body.replace(/<[^>]+>/g, '');
+  const portalVisible = /@requ\b/i.test(plainText);
   const doc = await Comment.create({
     body,
     issue: issueId,
     author: authorId,
+    portalVisible,
+    ...opts,
   });
   await issueHistoryService.recordCommentAdded(issueId, authorId, String(doc._id));
   const populated = await Comment.findById(doc._id)
@@ -59,9 +64,11 @@ export async function update(
   authorId: string
 ): Promise<unknown | null> {
   const oldComment = await Comment.findOne({ _id: commentId, issue: issueId }).select('body').lean();
+  const plainText = body.replace(/<[^>]+>/g, '');
+  const portalVisible = /@requ\b/i.test(plainText);
   const comment = await Comment.findOneAndUpdate(
     { _id: commentId, issue: issueId },
-    { $set: { body } },
+    { $set: { body, portalVisible } },
     { new: true, runValidators: true }
   )
     .populate('author', 'name email')

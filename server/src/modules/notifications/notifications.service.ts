@@ -1,4 +1,4 @@
-import { Notification, type NotificationType } from './notification.model';
+import { Notification } from './notification.model';
 import { notifyInAppNotification } from '../../websocket';
 import { toAppRelativeUrl } from '../../utils/notificationUrl';
 
@@ -12,8 +12,8 @@ export async function listForUser(params: {
   const limit = Math.min(Math.max(1, params.limit ?? 30), 100);
   const skip = (page - 1) * limit;
 
-  const filter: Record<string, unknown> = { toUser: params.userId };
-  if (params.unreadOnly) filter.readAt = null;
+  const filter: Record<string, unknown> = { userId: params.userId };
+  if (params.unreadOnly) filter.isRead = false;
 
   const [data, total] = await Promise.all([
     Notification.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
@@ -30,44 +30,45 @@ export async function listForUser(params: {
 }
 
 export async function unreadCount(userId: string): Promise<number> {
-  return Notification.countDocuments({ toUser: userId, readAt: null });
+  return Notification.countDocuments({ userId, isRead: false });
 }
 
 export async function markRead(notificationId: string, userId: string) {
   return Notification.findOneAndUpdate(
-    { _id: notificationId, toUser: userId },
-    { $set: { readAt: new Date() } },
+    { _id: notificationId, userId },
+    { $set: { isRead: true } },
     { new: true }
   ).lean();
 }
 
 export async function markAllRead(userId: string) {
-  const res = await Notification.updateMany(
-    { toUser: userId, readAt: null },
-    { $set: { readAt: new Date() } }
-  );
+  const res = await Notification.updateMany({ userId, isRead: false }, { $set: { isRead: true } });
   return { updated: res.modifiedCount ?? 0 };
 }
 
+export async function deleteForUser(notificationId: string, userId: string) {
+  return Notification.findOneAndDelete({ _id: notificationId, userId }).lean();
+}
+
 export async function createNotification(params: {
-  toUser: string;
-  type: NotificationType;
+  userId: string;
+  type: string;
   title: string;
   body?: string;
-  url?: string;
-  meta?: Record<string, unknown>;
+  link?: string;
+  metadata?: Record<string, unknown>;
 }) {
-  const normalizedUrl = toAppRelativeUrl(params.url);
+  const normalizedLink = toAppRelativeUrl(params.link);
   const doc = await Notification.create({
-    toUser: params.toUser,
+    userId: params.userId,
     type: params.type,
     title: params.title,
     body: params.body ?? '',
-    url: normalizedUrl,
-    meta: params.meta,
+    isRead: false,
+    link: normalizedLink,
+    metadata: params.metadata ?? {},
   });
   const payload = doc.toObject();
-  notifyInAppNotification(params.toUser, payload as unknown as Record<string, unknown>);
+  notifyInAppNotification(params.userId, payload as unknown as Record<string, unknown>);
   return payload;
 }
-

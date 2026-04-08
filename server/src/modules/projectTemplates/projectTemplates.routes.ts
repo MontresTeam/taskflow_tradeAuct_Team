@@ -5,6 +5,7 @@ import { validate } from '../../middleware/validate';
 import * as projectTemplatesController from './projectTemplates.controller';
 import { asyncHandler } from '../../utils/asyncHandler';
 import { projectsValidation } from '../projects/projects.validation';
+import { TASK_FLOW_PERMISSIONS } from '../../shared/constants/permissions';
 
 const router = Router();
 
@@ -12,13 +13,13 @@ router.use(authMiddleware);
 router.get('/', asyncHandler(projectTemplatesController.listTemplates as Parameters<typeof asyncHandler>[0]));
 router.delete(
   '/:id',
-  requirePermission('projects:create'),
+  requirePermission(TASK_FLOW_PERMISSIONS.PROJECT.PROJECT.CREATE),
   validate(projectsValidation.idParam.shape.params, 'params'),
   asyncHandler(projectTemplatesController.deleteTemplate as Parameters<typeof asyncHandler>[0])
 );
 router.patch(
   '/:id',
-  requirePermission('projects:create'),
+  requirePermission(TASK_FLOW_PERMISSIONS.PROJECT.PROJECT.CREATE),
   ...projectTemplatesController.patchTemplateHandler
 );
 router.get('/:id', asyncHandler(projectTemplatesController.getTemplate as Parameters<typeof asyncHandler>[0]));

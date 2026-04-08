@@ -305,9 +305,6 @@ export default function Profile() {
             {user.roleName && (
               <span className="px-2 py-0.5 rounded-md bg-[color:var(--bg-page)]">{user.roleName}</span>
             )}
-            {user.designationName && (
-              <span className="px-2 py-0.5 rounded-md bg-[color:var(--bg-page)]">{user.designationName}</span>
-            )}
           </div>
         </div>
       </div>
@@ -433,10 +430,6 @@ export default function Profile() {
             <div>
               <dt className="text-[color:var(--text-muted)] mb-0.5">Role</dt>
               <dd className="text-[color:var(--text-primary)] font-medium">{user.roleName ?? user.role}</dd>
-            </div>
-            <div>
-              <dt className="text-[color:var(--text-muted)] mb-0.5">Designation</dt>
-              <dd className="text-[color:var(--text-primary)] font-medium">{user.designationName ?? '—'}</dd>
             </div>
             <div>
               <dt className="text-[color:var(--text-muted)] mb-0.5">Member since</dt>

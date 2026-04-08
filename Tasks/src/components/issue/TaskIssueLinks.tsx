@@ -1,4 +1,5 @@
 import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import type { IssueLink, IssueLinkType, IssueLinkTypeWithVirtual } from '../../lib/api';
 import { issuesApi, getIssueKey } from '../../lib/api';
@@ -159,13 +160,13 @@ const TaskIssueLinks = forwardRef<TaskIssueLinksHandle, TaskIssueLinksProps>(fun
         </ul>
       )}
 
-      {linkModalOpen && (
+      {linkModalOpen && createPortal(
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in"
           onClick={() => setLinkModalOpen(false)}
         >
           <div
-            className="w-full max-w-md rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] shadow-xl p-4"
+            className="w-full max-w-md rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] shadow-xl p-4 animate-scale-in"
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-sm font-semibold text-[color:var(--text-primary)] mb-3">Link issue</h3>
@@ -229,7 +230,8 @@ const TaskIssueLinks = forwardRef<TaskIssueLinksHandle, TaskIssueLinksProps>(fun
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );

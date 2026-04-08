@@ -56,7 +56,7 @@ export async function getMyPermissions(req: Request & { user?: AuthPayload }, re
   const userId = req.user?.id;
   if (!userId) throw new ApiError(401, 'Unauthorized');
   const projectId = req.params.id;
-  const permissions = await getProjectPermissionsForUser(projectId, userId);
+  const permissions = await getProjectPermissionsForUser(projectId, userId, req.user?.permissions ?? []);
   res.status(200).json({ success: true, data: { permissions } });
 }
 
@@ -144,6 +144,19 @@ export async function cancelInvitation(req: Request & { user?: AuthPayload }, re
   if (!userId) throw new ApiError(401, 'Unauthorized');
   await projectInvitationsService.cancelInvitation(req.params.id, req.params.invitationId!, userId);
   res.status(200).json({ success: true, data: { cancelled: true } });
+}
+
+export async function updateMemberDesignation(req: Request, res: Response): Promise<void> {
+  const { projectId, memberId } = req.params;
+  const { designationId } = req.body;
+  const result = await projectInvitationsService.updateMemberDesignation(projectId, memberId, designationId);
+  res.status(200).json({ success: true, data: result });
+}
+
+export async function removeMember(req: Request, res: Response): Promise<void> {
+  const { projectId, memberId } = req.params;
+  await projectInvitationsService.removeMember(projectId, memberId);
+  res.status(200).json({ success: true, data: { message: 'Member removed' } });
 }
 
 export async function getSprintReport(req: Request & { user?: AuthPayload }, res: Response): Promise<void> {

@@ -5,6 +5,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { projectTemplatesApi, type ProjectTemplate } from '../lib/api';
 import ConfirmModal from '../components/ConfirmModal';
 import { EditIcon, TrashIcon } from '../components/icons/NavigationIcons';
+import { userHasPermission } from '../utils/permissions';
+import { TASK_FLOW_PERMISSIONS } from '@shared/constants/permissions';
 
 function countSummary(t: ProjectTemplate) {
   const s = t.statuses?.length ?? 0;
@@ -25,7 +27,7 @@ export default function ProjectTemplates() {
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
 
-  const canManage = Boolean(user?.permissions?.includes('projects:create'));
+  const canManage = userHasPermission(user?.permissions ?? [], TASK_FLOW_PERMISSIONS.PROJECT.PROJECT.CREATE);
 
   useEffect(() => {
     if (!token) return;

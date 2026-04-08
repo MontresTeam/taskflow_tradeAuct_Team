@@ -39,6 +39,17 @@ export const env = {
   azureRedirectUri: cleanEnvValue(process.env.AZURE_REDIRECT_URI) || cleanEnvValue(process.env.APP_URL) || 'http://localhost:5173/login',
 
   msUserInfoEndpoint: cleanEnvValue(process.env.MS_USER_INFO_ENDPOINT) || 'https://graph.microsoft.com/oidc/userinfo',
+  frontendUrl: cleanEnvValue(process.env.FRONTEND_URL) || cleanEnvValue(process.env.APP_URL) || 'http://localhost:5173',
+
+  googleClientId: cleanEnvValue(process.env.GOOGLE_CLIENT_ID),
+  googleClientSecret: cleanEnvValue(process.env.GOOGLE_CLIENT_SECRET),
+  googleCallbackUrl:
+    cleanEnvValue(process.env.GOOGLE_CALLBACK_URL) || `http://localhost:${parseInt(process.env.PORT ?? '5000', 10)}/api/auth/oauth/google/callback`,
+
+  microsoftOAuthCallbackUrl:
+    cleanEnvValue(process.env.MICROSOFT_CALLBACK_URL) ||
+    `http://localhost:${parseInt(process.env.PORT ?? '5000', 10)}/api/auth/oauth/microsoft/callback`,
+
   msTokenEndpoint: (() => {
     const tenant = cleanEnvValue(process.env.AZURE_AD_TENANT_ID) || 'common';
     const configured = cleanEnvValue(process.env.MS_TOKEN_ENDPOINT);

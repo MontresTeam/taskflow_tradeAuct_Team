@@ -28,10 +28,19 @@ export const inviteUserSchema = z.object({
   }),
 });
 
+export const updatePermissionOverridesSchema = z.object({
+  params: z.object({ id: z.string().min(1) }),
+  body: z.object({
+    granted: z.array(z.string()).default([]),
+    revoked: z.array(z.string()).default([]),
+  }),
+});
+
 export const usersValidation = {
   userIdParam: userIdParamSchema,
   updateUser: updateUserSchema,
   inviteUser: inviteUserSchema,
+  updatePermissionOverrides: updatePermissionOverridesSchema,
 };
 
 export type UpdateUserBody = z.infer<typeof updateUserSchema>['body'];

@@ -118,11 +118,11 @@ function TimesheetDetailsModal({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg max-h-[85vh] overflow-hidden rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] shadow-xl flex flex-col"
+        className="w-full max-w-lg max-h-[85vh] overflow-hidden rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] shadow-xl flex flex-col animate-scale-in"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-4 py-3 border-b border-[color:var(--border-subtle)] bg-[color:var(--bg-elevated)] flex items-center justify-between">

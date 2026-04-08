@@ -88,13 +88,18 @@ export interface AuthUser {
   email: string;
   name: string;
   avatarUrl?: string;
-  role: string;
+  userType: 'taskflow' | 'customer';
+  // TaskFlow fields
+  role?: string;
   roleId?: string;
   roleName?: string;
-  designationName?: string;
-  permissions: string[];
-  mustChangePassword: boolean;
+  permissions?: string[];
+  mustChangePassword?: boolean;
   createdAt?: string;
+  // Customer fields
+  orgId?: string;
+  isOrgAdmin?: boolean;
+  customerPermissions?: string[];
 }
 
 export interface AuthData {
@@ -125,6 +130,8 @@ export const authApi = {
 
   changePassword: (currentPassword: string, newPassword: string, token: string) =>
     api.patch<{ user: AuthUser }>('/auth/me/password', { currentPassword, newPassword }, token),
+  setPassword: (newPassword: string, token: string) =>
+    api.post<{ user: AuthUser }>('/auth/set-password', { newPassword }, token),
 
   forgotPassword: (email: string) =>
     api.post<{ message?: string }>('/auth/forgot-password', { email }),
@@ -225,8 +232,20 @@ export interface Project {
 export interface ProjectMember {
   _id: string;
   project: string;
-  user: { _id: string; name: string; email: string };
-  role: { _id: string; name: string };
+  user: { _id: string; name: string; email: string; avatarUrl?: string };
+  designationId?: ProjectDesignation | string;
+  permissions?: string[];
+  createdAt?: string;
+}
+
+export interface ProjectDesignation {
+  _id: string;
+  name: string;
+  code: string;
+  projectId: string;
+  permissions: string[];
+  isSystem: boolean;
+  createdAt: string;
 }
 
 export interface ProjectInvitation {
@@ -257,12 +276,16 @@ export interface ProjectTemplate {
 /* In-app notifications */
 export interface InAppNotification {
   _id: string;
-  toUser: string;
+  userId?: string;
+  toUser?: string;
   type: string;
   title: string;
   body?: string;
+  link?: string | null;
   url?: string;
+  isRead?: boolean;
   readAt?: string | null;
+  metadata?: Record<string, unknown>;
   meta?: Record<string, unknown>;
   createdAt: string;
 }
@@ -273,11 +296,14 @@ export const notificationsApi = {
     if (params.page) q.set('page', String(params.page));
     if (params.limit) q.set('limit', String(params.limit));
     if (params.unreadOnly) q.set('unreadOnly', 'true');
-    return api.get<Paginated<InAppNotification>>(`/notifications?${q.toString()}`, token);
+    return api.get<Paginated<InAppNotification>>(`/inbox/notifications?${q.toString()}`, token);
   },
-  unreadCount: (token: string) => api.get<{ unread: number }>(`/notifications/unread-count`, token),
-  markRead: (id: string, token: string) => api.patch<InAppNotification>(`/notifications/${id}/read`, {}, token),
-  markAllRead: (token: string) => api.post<{ updated: number }>(`/notifications/read-all`, {}, token),
+  unreadCount: (token: string) =>
+    api.get<{ unread: number }>(`/inbox/notifications/unread-count`, token),
+  markRead: (id: string, token: string) =>
+    api.patch<InAppNotification>(`/inbox/notifications/${id}/read`, {}, token),
+  markAllRead: (token: string) =>
+    api.patch<{ updated: number }>(`/inbox/notifications/read-all`, {}, token),
 };
 
 export const projectsApi = {
@@ -320,10 +346,24 @@ export const projectsApi = {
     api.get<ProjectMember[]>(`/projects/${projectId}/members`, token),
   getInvitations: (projectId: string, token: string) =>
     api.get<ProjectInvitation[]>(`/projects/${projectId}/invitations`, token),
-  inviteMember: (projectId: string, body: { email: string; roleId?: string }, token: string) =>
+  inviteMember: (projectId: string, body: { email: string; designationId?: string }, token: string) =>
     api.post<unknown>(`/projects/${projectId}/invite`, body, token),
+  updateMember: (projectId: string, memberId: string, body: { designationId: string }, token: string) =>
+    api.patch<ProjectMember>(`/projects/${projectId}/members/${memberId}`, body, token),
+  removeMember: (projectId: string, memberId: string, token: string) =>
+    api.delete(`/projects/${projectId}/members/${memberId}`, token),
   cancelInvitation: (projectId: string, invitationId: string, token: string) =>
     api.delete(`/projects/${projectId}/invitations/${invitationId}`, token),
+
+  // Designations
+  listDesignations: (projectId: string, token: string) =>
+    api.get<ProjectDesignation[]>(`/projects/${projectId}/designations`, token),
+  createDesignation: (projectId: string, body: { name: string; permissions: string[] }, token: string) =>
+    api.post<ProjectDesignation>(`/projects/${projectId}/designations`, body, token),
+  updateDesignation: (projectId: string, id: string, body: { name?: string; permissions?: string[] }, token: string) =>
+    api.patch<ProjectDesignation>(`/projects/${projectId}/designations/${id}`, body, token),
+  deleteDesignation: (projectId: string, id: string, token: string) =>
+    api.delete(`/projects/${projectId}/designations/${id}`, token),
 };
 
 export const projectTemplatesApi = {
@@ -769,63 +809,56 @@ export interface User {
   name: string;
   email: string;
   role?: string;
-  roleId?: { _id: string; name: string };
-  designation?: { _id: string; name: string };
+  roleId?: { _id: string; name: string; permissions?: string[] };
   projectCount?: number;
   createdAt?: string;
   enabled?: boolean;
+  permissionOverrides?: { granted: string[]; revoked: string[] };
 }
 
 export interface InviteUserBody {
   name: string;
   email: string;
-  designationId?: string;
   roleId: string;
 }
 
 export interface UpdateUserBody {
   name?: string;
   roleId?: string | null;
-  designationId?: string | null;
   enabled?: boolean;
 }
 
 export const usersApi = {
   list: (page = 1, limit = 100, token: string) =>
-    api.get<Paginated<User>>(`/users?page=${page}&limit=${limit}`, token),
-  get: (id: string, token: string) => api.get<User>(`/users/${id}`, token),
+    api.get<Paginated<User>>(`/auth/users?page=${page}&limit=${limit}`, token),
+  get: (id: string, token: string) => api.get<User>(`/auth/users/${id}`, token),
   update: (id: string, body: UpdateUserBody, token: string) =>
-    api.patch<User>(`/users/${id}`, body, token),
+    api.patch<User>(`/auth/users/${id}`, body, token),
   invite: (body: InviteUserBody, token: string) =>
-    api.post<User>('/users/invite', body, token),
+    api.post<User>('/auth/users/invite', body, token),
+  updatePermissions: (id: string, overrides: { granted: string[]; revoked: string[] }, token: string) =>
+    api.patch<User>(`/auth/users/${id}/permissions`, overrides, token),
 };
 
-/* Permissions (predefined list for role editor) */
+/** Catalog entries for role / user permission pickers (matches server ALL_PERMISSIONS). */
 export interface PermissionItem {
   code: string;
   label: string;
 }
 
-export const permissionsApi = {
-  list: (token?: string) => api.get<PermissionItem[]>('/roles/permissions', token),
-};
-
-export interface LicenseData {
-  userCount: number;
-  maxUsers: number | null;
-  plan?: string;
-}
-
-export const adminApi = {
-  getLicense: (token: string) => api.get<LicenseData>('/admin/license', token),
-};
-
-/* Roles */
 export interface Role {
   _id: string;
   name: string;
   permissions: string[];
+  code?: string;
+  isSystem?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
+
+export const permissionsApi = {
+  list: (token?: string) => api.get<PermissionItem[]>('/roles/permissions', token),
+};
 
 export const rolesApi = {
   list: (token: string) => api.get<Role[]>('/roles', token),
@@ -835,24 +868,6 @@ export const rolesApi = {
   update: (id: string, body: { name?: string; permissions?: string[] }, token: string) =>
     api.patch<Role>(`/roles/${id}`, body, token),
   delete: (id: string, token: string) => api.delete(`/roles/${id}`, token),
-};
-
-/* Designations */
-export interface Designation {
-  _id: string;
-  name: string;
-  slug?: string;
-  order?: number;
-}
-
-export const designationsApi = {
-  list: (token: string) => api.get<Designation[]>('/designations', token),
-  get: (id: string, token: string) => api.get<Designation>(`/designations/${id}`, token),
-  create: (body: { name: string; slug?: string; order?: number }, token: string) =>
-    api.post<Designation>('/designations', body, token),
-  update: (id: string, body: { name?: string; slug?: string; order?: number }, token: string) =>
-    api.patch<Designation>(`/designations/${id}`, body, token),
-  delete: (id: string, token: string) => api.delete(`/designations/${id}`, token),
 };
 
 /* Inbox */
@@ -1328,4 +1343,265 @@ export const sprintsApi = {
       `/sprints/${sprintId}/completion-preview?project=${projectId}`,
       token
     ),
+};
+
+// ── Customer Portal Types ─────────────────────────────────────────────────
+export interface PortalComment {
+  _id?: string;
+  body: string;
+  authorName: string;
+  customerId: string;
+  forwardedToIssue: boolean;
+  createdAt: string;
+}
+
+export interface IssuePortalComment {
+  _id: string;
+  body: string;
+  author?: { _id: string; name: string; email: string };
+  portalVisible?: boolean;
+  portalHighlighted?: boolean;
+  portalAuthorName?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TicketHistoryItem {
+  _id: string;
+  action: 'created' | 'field_change' | 'comment_added' | 'comment_updated';
+  author: { _id: string; name: string };
+  createdAt: string;
+  field?: string;
+  fromValue?: string;
+  toValue?: string;
+  commentId?: string;
+  commentBody?: string;
+}
+
+export interface WorkLogByUser {
+  _id: string;
+  authorName?: string;
+  authorEmail?: string;
+  totalMinutes: number;
+}
+
+export interface ChildTask {
+  _id: string;
+  key?: string;
+  title: string;
+  status: string;
+  priority: string;
+  type: string;
+  assignee?: { _id: string; name: string; email: string };
+}
+
+export interface IssueLinkItem {
+  _id: string;
+  linkType: string;
+  sourceIssue: { _id: string; key?: string; title: string; status: string; type: string; priority: string };
+  targetIssue: { _id: string; key?: string; title: string; status: string; type: string; priority: string };
+}
+
+export interface LinkedIssueDetails {
+  _id: string;
+  key?: string;
+  title: string;
+  status: string;
+  priority: string;
+  assignee?: { _id: string; name: string; email: string; avatarUrl?: string };
+  timeEstimateMinutes?: number;
+}
+
+export interface TicketDetails {
+  totalLoggedMinutes: number;
+  workLogByUser: WorkLogByUser[];
+  issueHistory: TicketHistoryItem[];
+  assigneeHistory: TicketHistoryItem[];
+  childTasks: ChildTask[];
+  issueLinks: IssueLinkItem[];
+  portalVisibleComments: IssuePortalComment[];
+}
+
+export interface CustomerRequest {
+  _id: string;
+  customerOrgId: { _id: string; name: string; slug: string } | string;
+  projectId: { _id: string; name: string; key: string } | string;
+  title: string;
+  description: string;
+  type: 'bug' | 'feature' | 'suggestion' | 'concern' | 'other';
+  priority: 'low' | 'medium' | 'high' | 'critical';
+  attachments: string[];
+  createdBy: { _id: string; name: string; email: string } | string;
+  approvalFlow: {
+    customerAdminStage: { required: boolean; status: string; reviewedBy?: { name: string }; reviewedAt?: string; note?: string };
+    taskflowStage: { status: string; reviewedBy?: { name: string }; reviewedAt?: string; note?: string };
+  };
+  status: string;
+  linkedIssueId?: string;
+  linkedIssueKey?: string;
+  linkedIssue?: LinkedIssueDetails;
+  ticketDetails?: TicketDetails;
+  portalComments?: PortalComment[];
+  closureEmailSentAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CustomerMember {
+  _id: string;
+  name: string;
+  email: string;
+  avatarUrl?: string;
+  roleId: { _id: string; name: string; permissions: string[] } | string;
+  isOrgAdmin: boolean;
+  status: string;
+  mustChangePassword: boolean;
+  createdAt: string;
+  permissionOverrides?: { granted: string[]; revoked: string[] };
+}
+
+export interface CustomerRole {
+  _id: string;
+  name: string;
+  permissions: string[];
+  isDefault: boolean;
+  isSystemRole: boolean;
+}
+
+export interface ProjectMapping {
+  _id: string;
+  projectId: { _id: string; name: string; key: string };
+  allowedRequestTypes: string[];
+  status: string;
+}
+
+export interface CustomerOrg {
+  _id: string;
+  name: string;
+  slug: string;
+  contactEmail: string;
+  contactPhone?: string;
+  description?: string;
+  status: string;
+  createdAt: string;
+}
+
+export interface CreateRequestInput {
+  projectId: string;
+  title: string;
+  description: string;
+  type: string;
+  priority: string;
+}
+
+export interface InviteMemberInput {
+  name: string;
+  email: string;
+  roleId: string;
+}
+
+export interface CreateOrgInput {
+  name: string;
+  contactEmail: string;
+  adminName: string;
+  adminEmail: string;
+  contactPhone?: string;
+  description?: string;
+}
+
+// ── Customer Portal API ────────────────────────────────────────────────────
+export const portalApi = {
+  // Auth
+  me: (token: string) => api.get<{ user: AuthUser }>('/customer/auth/me', token),
+  updateMe: (data: { name?: string; avatarUrl?: string }, token: string) =>
+    api.patch<{ user: AuthUser }>('/customer/auth/me', data, token),
+  changePassword: (currentPassword: string, newPassword: string, token: string) =>
+    api.patch('/customer/auth/change-password', { currentPassword, newPassword }, token),
+  forgotPassword: (email: string) =>
+    api.post('/customer/auth/forgot-password', { email }),
+  resetPassword: (token: string, newPassword: string) =>
+    api.post('/customer/auth/reset-password', { token, newPassword }),
+
+  // Requests
+  listRequests: (token: string, params?: { status?: string; projectId?: string }) => {
+    const q = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
+    return api.get<{ requests: CustomerRequest[] }>(`/customer/requests${q}`, token);
+  },
+  getRequest: (id: string, token: string) =>
+    api.get<{ request: CustomerRequest }>(`/customer/requests/${id}`, token),
+  createRequest: (data: CreateRequestInput, token: string) =>
+    api.post<{ request: CustomerRequest }>('/customer/requests', data, token),
+  approveRequest: (id: string, note: string | undefined, token: string) =>
+    api.post(`/customer/requests/${id}/approve`, { note }, token),
+  rejectRequest: (id: string, reason: string, note: string | undefined, token: string) =>
+    api.post(`/customer/requests/${id}/reject`, { reason, note }, token),
+  addPortalComment: (id: string, body: string, token: string) =>
+    api.post<{ comment: PortalComment }>(`/customer/requests/${id}/comments`, { body }, token),
+
+  // Team
+  listMembers: (token: string) =>
+    api.get<{ members: CustomerMember[] }>('/customer/team', token),
+  inviteMember: (data: InviteMemberInput, token: string) =>
+    api.post('/customer/team', data, token),
+  updateMember: (id: string, data: { roleId?: string; status?: string }, token: string) =>
+    api.patch(`/customer/team/${id}`, data, token),
+  removeMember: (id: string, token: string) =>
+    api.delete(`/customer/team/${id}`, token),
+
+  // Roles
+  listRoles: (token: string) =>
+    api.get<{ roles: CustomerRole[] }>('/customer/roles', token),
+  createRole: (data: { name: string; permissions: string[] }, token: string) =>
+    api.post('/customer/roles', data, token),
+  updateRole: (id: string, data: { name?: string; permissions?: string[] }, token: string) =>
+    api.patch(`/customer/roles/${id}`, data, token),
+  deleteRole: (id: string, token: string) =>
+    api.delete(`/customer/roles/${id}`, token),
+
+  // Projects
+  listProjects: (token: string) =>
+    api.get<{ mappings: ProjectMapping[] }>('/customer/projects', token),
+};
+
+// ── Admin Customer API ─────────────────────────────────────────────────────
+export const adminCustomerApi = {
+  listOrgs: (token: string) =>
+    api.get<{ orgs: CustomerOrg[] }>('/admin/customer-orgs', token),
+  createOrg: (data: CreateOrgInput, token: string) =>
+    api.post<{ org: CustomerOrg }>('/admin/customer-orgs', data, token),
+  getOrg: (id: string, token: string) =>
+    api.get<{ org: CustomerOrg }>(`/admin/customer-orgs/${id}`, token),
+  updateOrg: (id: string, data: Partial<CreateOrgInput>, token: string) =>
+    api.patch(`/admin/customer-orgs/${id}`, data, token),
+  deleteOrg: (id: string, token: string) =>
+    api.delete(`/admin/customer-orgs/${id}`, token),
+
+  listProjects: (id: string, token: string) =>
+    api.get<{ mappings: ProjectMapping[] }>(`/admin/customer-orgs/${id}/projects`, token),
+  addProject: (id: string, data: { projectId: string; allowedRequestTypes?: string[] }, token: string) =>
+    api.post(`/admin/customer-orgs/${id}/projects`, data, token),
+  removeProject: (id: string, projectId: string, token: string) =>
+    api.delete(`/admin/customer-orgs/${id}/projects/${projectId}`, token),
+
+  listOrgRoles: (id: string, token: string) =>
+    api.get<{ roles: CustomerRole[] }>(`/admin/customer-orgs/${id}/roles`, token),
+  listMembers: (id: string, token: string) =>
+    api.get<{ members: CustomerMember[] }>(`/admin/customer-orgs/${id}/members`, token),
+  updateMember: (orgId: string, userId: string, data: { roleId?: string; status?: string }, token: string) =>
+    api.patch<CustomerMember>(`/admin/customer-orgs/${orgId}/members/${userId}`, data, token),
+  updateMemberPermissions: (orgId: string, userId: string, overrides: { granted: string[]; revoked: string[] }, token: string) =>
+    api.patch<CustomerMember>(`/admin/customer-orgs/${orgId}/members/${userId}/permissions`, overrides, token),
+
+  listPendingRequests: (token: string) =>
+    api.get<{ requests: CustomerRequest[] }>('/customer/requests/pending-tf-approval', token),
+  listAllRequests: (token: string, params?: { status?: string; orgId?: string; page?: number; limit?: number }) => {
+    const q = params ? '?' + new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)]))).toString() : '';
+    return api.get<{ requests: CustomerRequest[]; total: number; totalPages: number; page: number }>(`/customer/requests/all-tf${q}`, token);
+  },
+  getRequest: (id: string, token: string) =>
+    api.get<{ request: CustomerRequest }>(`/customer/requests/tf/${id}`, token),
+  approveRequest: (id: string, note: string | undefined, token: string) =>
+    api.post(`/customer/requests/${id}/tf-approve`, { note }, token),
+  rejectRequest: (id: string, reason: string, note: string | undefined, token: string) =>
+    api.post(`/customer/requests/${id}/tf-reject`, { reason, note }, token),
 };

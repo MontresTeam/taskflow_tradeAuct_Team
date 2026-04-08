@@ -1,7 +1,9 @@
 /**
- * Predefined permissions — single source of truth. Every API route and UI action maps to one of these.
- * Roles in DB store an array of these codes; no permissions are stored except as part of a role.
+ * UI labels for permission pickers (colon-era codes).
+ * Runtime checks use dot notation from `@shared/constants/permissions` via isValidPermission.
  */
+import { ALL_PERMISSIONS as ALL_DOT_PERMISSIONS } from '../shared/constants/permissions';
+import { LEGACY_COLON_TO_DOT, LEGACY_CUSTOMER_COLON_TO_DOT } from '../shared/constants/legacyPermissionMap';
 
 export const GLOBAL_PERMISSIONS = [
   { code: 'inbox:read', label: 'View inbox' },
@@ -17,6 +19,9 @@ export const GLOBAL_PERMISSIONS = [
   { code: 'reports:view', label: 'View reports' },
   { code: 'reports:create', label: 'Create reports' },
   { code: 'license:view', label: 'View license' },
+  { code: 'customers:manage', label: 'Manage customer organizations' },
+  { code: 'customers:view', label: 'View customer organizations' },
+  { code: 'customer-requests:approve', label: 'Approve / reject customer requests' },
 ] as const;
 
 export const PROJECT_PERMISSIONS = [
@@ -42,20 +47,46 @@ export const PROJECT_PERMISSIONS = [
   { code: 'testManagement:edit', label: 'Edit test management' },
 ] as const;
 
+/** Combined global + project permission definitions for admin UI (colon codes + labels). */
 export const ALL_PERMISSIONS = [...GLOBAL_PERMISSIONS, ...PROJECT_PERMISSIONS];
 
-export const PERMISSION_CODES = ALL_PERMISSIONS.map((p) => p.code);
+/** Accept dot-notation and legacy colon codes */
+export const PERMISSION_CODES = [...ALL_DOT_PERMISSIONS, ...ALL_PERMISSIONS.map((p) => p.code)] as string[];
 
-/** All project permission codes except settings:manage, project:edit, project:delete — used for default "Project Member" role on accept. Edit/delete require a role with those permissions (e.g. Project Lead). */
 export const DEFAULT_PROJECT_MEMBER_PERMISSION_CODES = PROJECT_PERMISSIONS.filter(
   (p) => p.code !== 'settings:manage' && p.code !== 'project:edit' && p.code !== 'project:delete'
 ).map((p) => p.code);
 
-/** Every project-scoped permission — assigned to the project lead (and creator when different) on project create. */
 export const FULL_PROJECT_ROLE_PERMISSION_CODES = PROJECT_PERMISSIONS.map((p) => p.code);
 
-export type PermissionCode = (typeof PERMISSION_CODES)[number];
+export const CUSTOMER_PERMISSIONS = [
+  { code: 'requests:create', label: 'Raise new requests' },
+  { code: 'requests:view_own', label: 'View own requests' },
+  { code: 'requests:view_all', label: 'View all org requests' },
+  { code: 'requests:approve', label: 'Approve / reject member requests' },
+  { code: 'team:view', label: 'View team members' },
+  { code: 'team:invite', label: 'Invite team members' },
+  { code: 'team:manage', label: 'Manage team members' },
+  { code: 'roles:manage', label: 'Manage custom roles' },
+  { code: 'projects:view', label: 'View linked projects' },
+] as const;
+
+export const CUSTOMER_PERMISSION_CODES = CUSTOMER_PERMISSIONS.map((p) => p.code);
+export type CustomerPermissionCode = (typeof CUSTOMER_PERMISSION_CODES)[number];
+
+export const ORG_ADMIN_PERMISSION_CODES = CUSTOMER_PERMISSION_CODES as unknown as string[];
+
+export const ORG_MEMBER_PERMISSION_CODES: string[] = [
+  'requests:create',
+  'requests:view_own',
+  'team:view',
+  'projects:view',
+];
+
+export type PermissionCode = string;
 
 export function isValidPermission(code: string): code is PermissionCode {
-  return PERMISSION_CODES.includes(code as PermissionCode);
+  if (ALL_DOT_PERMISSIONS.includes(code)) return true;
+  if (code in LEGACY_COLON_TO_DOT || code in LEGACY_CUSTOMER_COLON_TO_DOT) return true;
+  return ALL_PERMISSIONS.some((p) => p.code === code);
 }

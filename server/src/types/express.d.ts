@@ -8,10 +8,22 @@ export interface AuthPayload {
   mustChangePassword: boolean;
 }
 
+export interface CustomerAuthPayload {
+  id: string;
+  email: string;
+  name: string;
+  orgId: string;
+  isOrgAdmin: boolean;
+  permissions: string[];
+  mustChangePassword: boolean;
+}
+
 declare global {
   namespace Express {
+    /** TaskFlow JWT user (passport-compatible name) */
+    interface User extends AuthPayload {}
     interface Request {
-      user?: AuthPayload;
+      customerUser?: CustomerAuthPayload;
     }
   }
 }

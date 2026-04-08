@@ -5,6 +5,14 @@
     "lib": ["ES2020"],
     "outDir": "./dist",
     "rootDir": "./src",
+    "baseUrl": "./src",
+    "paths": {
+      "@shared/*": ["shared/*"],
+      "@auth/*": ["modules/auth/*"],
+      "@project/*": ["modules/projects/*"],
+      "@org/*": ["modules/org/*"],
+      "@inbox/*": ["modules/inbox/*"]
+    },
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

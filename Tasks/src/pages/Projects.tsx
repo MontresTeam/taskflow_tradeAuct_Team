@@ -140,7 +140,7 @@ export default function Projects() {
           <h1 className="text-2xl font-bold tracking-tight">Projects</h1>
           {!user?.mustChangePassword &&
             Array.isArray(user?.permissions) &&
-            user.permissions.includes('projects:create') && (
+            user.permissions.includes('project.project.create') && (
               <button
                 type="button"
                 onClick={openCreate}

@@ -7,7 +7,10 @@ import { ApiError } from '../../utils/ApiError';
 import * as inboxService from '../inbox/inbox.service';
 import * as projectTemplatesService from '../projectTemplates/projectTemplates.service';
 import * as projectInvitationsService from './projectInvitations.service';
+import * as projectDesignationService from './projectDesignation.service';
 import type { CreateProjectBody, UpdateProjectBody } from './projects.validation';
+import { userHasPermission, mapLegacyProjectOrGlobalPermissions } from '../../shared/constants/legacyPermissionMap';
+import { PROJECT_PERMISSIONS } from '../../shared/constants/permissions';
 
 export interface PaginationOptions {
   page: number;
@@ -59,6 +62,9 @@ export async function create(
     priorities,
   });
   const projectId = project._id.toString();
+
+  // Create default designations
+  await projectDesignationService.createDefaultDesignations(projectId);
 
   // Selected lead gets every project permission (including settings:manage, project:delete, etc.)
   await projectInvitationsService.ensureUserHasFullProjectAccess(projectId, leadUserId);
@@ -115,8 +121,10 @@ export async function findAllForUser(
   for (const m of memberships) {
     const pid = (m.project as mongoose.Types.ObjectId).toString();
     const role = m.role as { permissions?: string[] } | null;
-    const perms = Array.isArray(role?.permissions) ? role.permissions : [];
-    permissionsByProject.set(pid, perms);
+    const snap = Array.isArray(m.permissions) && m.permissions.length > 0
+      ? mapLegacyProjectOrGlobalPermissions(m.permissions)
+      : mapLegacyProjectOrGlobalPermissions(Array.isArray(role?.permissions) ? role.permissions : []);
+    permissionsByProject.set(pid, snap);
   }
 
   const dataWithPerms = (data as Record<string, unknown>[]).map((p) => {
@@ -124,8 +132,8 @@ export async function findAllForUser(
     const perms = permissionsByProject.get(pid) ?? [];
     return {
       ...p,
-      canEdit: perms.includes('project:edit'),
-      canDelete: perms.includes('project:delete'),
+      canEdit: userHasPermission(perms, PROJECT_PERMISSIONS.SETTING.PROJECT_SETTING.UPDATE),
+      canDelete: userHasPermission(perms, PROJECT_PERMISSIONS.SCOPE.DELETE),
     };
   });
 

@@ -4,8 +4,11 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { usePushRegistration } from './hooks/usePushRegistration';
 import { NotificationsProvider } from './contexts/NotificationsContext';
 import ProtectedRoute from './components/ProtectedRoute';
+import PortalRoute from './components/PortalRoute';
 import ProjectLayout from './components/ProjectLayout';
 import Login from './pages/Login';
+import OAuthCallback from './pages/auth/OAuthCallback';
+import OAuthError from './pages/auth/OAuthError';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
 import Dashboard from './pages/Dashboard';
@@ -41,16 +44,46 @@ import ProjectSettings from './pages/ProjectSettings';
 import Versions from './pages/Versions';
 import Timesheet from './pages/Timesheet';
 import Users from './pages/Users';
-import Designations from './pages/Designations';
 import Roles from './pages/Roles';
+// Customer Portal pages
+import PortalDashboard from './pages/portal/PortalDashboard';
+import RequestList from './pages/portal/RequestList';
+import NewRequest from './pages/portal/NewRequest';
+import RequestDetail from './pages/portal/RequestDetail';
+import PortalTeam from './pages/portal/PortalTeam';
+import PortalRoles from './pages/portal/PortalRoles';
+import PortalProjects from './pages/portal/PortalProjects';
+import PortalApprovalQueue from './pages/portal/PortalApprovalQueue';
+import PortalProfile from './pages/portal/PortalProfile';
+// Admin customer pages
+import CustomerOrgs from './pages/admin/CustomerOrgs';
+import CustomerOrgDetail from './pages/admin/CustomerOrgDetail';
+import CustomerRequestApprovals from './pages/admin/CustomerRequestApprovals';
 
 function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/auth/oauth-callback" element={<OAuthCallback />} />
+      <Route path="/auth/error" element={<OAuthError />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/register" element={<Navigate to="/login" replace />} />
+
+      {/* Customer Portal routes */}
+      <Route element={<PortalRoute />}>
+        <Route path="/portal" element={<PortalDashboard />} />
+        <Route path="/portal/profile" element={<PortalProfile />} />
+        <Route path="/portal/requests" element={<RequestList />} />
+        <Route path="/portal/requests/new" element={<NewRequest />} />
+        <Route path="/portal/requests/:id" element={<RequestDetail />} />
+        <Route path="/portal/team" element={<PortalTeam />} />
+        <Route path="/portal/roles" element={<PortalRoles />} />
+        <Route path="/portal/projects" element={<PortalProjects />} />
+        <Route path="/portal/approval-queue" element={<PortalApprovalQueue />} />
+      </Route>
+
+      {/* TaskFlow internal routes */}
       <Route element={<ProtectedRoute />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/inbox" element={<Inbox />} />
@@ -63,8 +96,8 @@ function AppRoutes() {
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/audit-logs" element={<AuditLogs />} />
         <Route path="/users" element={<Users />} />
-        <Route path="/designations" element={<Designations />} />
         <Route path="/roles" element={<Roles />} />
+
         <Route path="/timesheet" element={<Timesheet />} />
         <Route path="/defect-metrics" element={<DefectMetrics />} />
         <Route path="/cost-usage" element={<CostUsage />} />
@@ -72,6 +105,10 @@ function AppRoutes() {
         <Route path="/reports" element={<Reports />} />
         <Route path="/projects" element={<Projects />} />
         <Route path="/project-templates" element={<ProjectTemplates />} />
+        {/* Admin: customer organisation management */}
+        <Route path="/admin/customer-orgs" element={<CustomerOrgs />} />
+        <Route path="/admin/customer-orgs/:id" element={<CustomerOrgDetail />} />
+        <Route path="/admin/customer-requests" element={<CustomerRequestApprovals />} />
         <Route path="/projects/:projectId" element={<ProjectLayout />}>
           <Route index element={<Navigate to="dashboard" replace />} />
           <Route path="dashboard" element={<ProjectDashboard />} />

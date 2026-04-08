@@ -603,8 +603,8 @@ export default function Versions() {
 
       {/* Create / Edit version modal - portal so it centers in viewport */}
       {versionModalOpen && createPortal(
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm overflow-auto" onClick={closeVersionModal}>
-          <div className="bg-[color:var(--bg-elevated)] border border-[color:var(--border-subtle)] rounded-2xl shadow-2xl w-full m-auto" style={{ maxWidth: 'min(28rem, calc(100vw - 2rem))' }} onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in" onClick={closeVersionModal}>
+          <div className="bg-[color:var(--bg-elevated)] border border-[color:var(--border-subtle)] rounded-2xl shadow-2xl w-full m-auto animate-scale-in" style={{ maxWidth: 'min(28rem, calc(100vw - 2rem))' }} onClick={(e) => e.stopPropagation()}>
             <div className="px-6 pt-6 pb-3 border-b border-[color:var(--border-subtle)]">
               <h3 className="text-sm font-semibold text-[color:var(--text-primary)]">{versionEdit ? `Edit version: ${versionEdit.name}` : 'New version'}</h3>
               <p className="text-[color:var(--text-muted)] text-xs mt-1">Version name (e.g. 1.0) and optional release date.</p>
@@ -682,8 +682,8 @@ export default function Versions() {
 
       {/* Release modal: select environment + issues to include; unchecked items get version removed */}
       {releaseModalVersion && createPortal(
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm overflow-auto" onClick={closeReleaseModal}>
-          <div className="bg-[color:var(--bg-elevated)] border border-[color:var(--border-subtle)] rounded-2xl shadow-2xl w-full flex flex-col max-h-[90vh]" style={{ maxWidth: 'min(36rem, calc(100vw - 2rem))' }} onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in" onClick={closeReleaseModal}>
+          <div className="bg-[color:var(--bg-elevated)] border border-[color:var(--border-subtle)] rounded-2xl shadow-2xl w-full flex flex-col max-h-[90vh] animate-scale-in" style={{ maxWidth: 'min(36rem, calc(100vw - 2rem))' }} onClick={(e) => e.stopPropagation()}>
             <div className="px-6 pt-6 pb-3 border-b border-[color:var(--border-subtle)] shrink-0">
               <h3 className="text-sm font-semibold text-[color:var(--text-primary)]">Release version {releaseModalVersion.name}</h3>
               <p className="text-[color:var(--text-muted)] text-xs mt-1">Choose environment and which issues to include. Unchecked items will have this version removed from their Fix version.</p>
@@ -800,12 +800,11 @@ export default function Versions() {
 
       {releaseNotesModal && createPortal(
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center p-4 overflow-y-auto backdrop-blur-md"
-          style={{ backgroundColor: 'rgba(0,0,0,0.85)' }}
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in"
           onClick={() => setReleaseNotesModal(null)}
         >
           <div
-            className="bg-[color:var(--bg-elevated)] border border-[color:var(--border-subtle)] rounded-2xl shadow-2xl w-full max-h-[90vh] flex flex-col mx-auto my-auto"
+            className="bg-[color:var(--bg-elevated)] border border-[color:var(--border-subtle)] rounded-2xl shadow-2xl w-full max-h-[90vh] flex flex-col mx-auto my-auto animate-scale-in"
             style={{ maxWidth: 'min(64rem, 95vw)' }}
             onClick={(e) => e.stopPropagation()}
           >
