@@ -67,6 +67,7 @@ router.use('/admin', adminRoutes);
 router.use('/analytics', analyticsRoutes);
 router.use('/reports', reportsRoutes);
 router.use('/notifications', notificationsRoutes);
+router.use('/uploads', uploadsRoutes);
 
 // Customer Portal routes
 router.use('/customer/auth', customerAuthRoutes);
