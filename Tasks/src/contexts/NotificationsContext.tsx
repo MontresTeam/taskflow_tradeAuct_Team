@@ -77,7 +77,14 @@ export function NotificationsProvider({
     if (!token) return;
     const res = await notificationsApi.markRead(id, token);
     if (res.success && res.data) {
-      setNotifications((prev) => prev.map((n) => (n._id === id ? { ...n, readAt: res.data!.readAt ?? new Date().toISOString() } : n)));
+      const now = new Date().toISOString();
+      setNotifications((prev) =>
+        prev.map((n) =>
+          n._id === id
+            ? { ...n, isRead: true, readAt: (res.data as { readAt?: string }).readAt ?? now }
+            : n
+        )
+      );
       setUnreadCount((c) => Math.max(0, c - 1));
     }
   }, [token]);
@@ -86,7 +93,10 @@ export function NotificationsProvider({
     if (!token) return;
     const res = await notificationsApi.markAllRead(token);
     if (res.success) {
-      setNotifications((prev) => prev.map((n) => ({ ...n, readAt: n.readAt ?? new Date().toISOString() })));
+      const now = new Date().toISOString();
+      setNotifications((prev) =>
+        prev.map((n) => ({ ...n, isRead: true, readAt: n.readAt ?? now }))
+      );
       setUnreadCount(0);
     }
   }, [token]);

@@ -54,12 +54,12 @@ export async function createComment(req: Request, res: Response): Promise<void> 
     };
     for (const userId of memberUserIds) {
       notificationsService.createNotification({
-        toUser: userId,
+        userId,
         type: 'mention',
         title: payload.title,
         body: payload.body,
-        url: issueUrl,
-        meta: payload.data,
+        link: issueUrl,
+        metadata: payload.data,
       }).catch(() => {});
       sendPushToUser(userId, payload).catch((err) => console.error('Push failed:', err));
       notifyPush(userId, payload);

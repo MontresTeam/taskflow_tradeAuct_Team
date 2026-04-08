@@ -1,4 +1,5 @@
 import express from 'express';
+import passport from 'passport';
 import cors from 'cors';
 import helmet from 'helmet';
 import path from 'path';
@@ -8,6 +9,8 @@ import morgan from 'morgan';
 import { env } from './config/env';
 
 const app = express();
+
+app.use(passport.initialize());
 
 // Allow the frontend (different origin in dev) to load uploaded images/videos.
 app.use(

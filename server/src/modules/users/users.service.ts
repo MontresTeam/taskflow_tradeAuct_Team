@@ -2,7 +2,8 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { User } from '../auth/user.model';
 import { Role } from '../roles/role.model';
-import { Designation } from '../designations/designation.model';
+import { mapLegacyProjectOrGlobalPermissions } from '../../shared/constants/legacyPermissionMap';
+import { mergeTaskflowPermissionFloor } from '../auth/permissionMerge';
 import { ProjectMember } from '../projects/projectMember.model';
 import { ApiError } from '../../utils/ApiError';
 import type { PaginationOptions, PaginatedResult } from '../projects/projects.service';
@@ -22,7 +23,7 @@ export async function findAll(
   const skip = (page - 1) * limit;
 
   const [rawData, total, projectCounts] = await Promise.all([
-    User.find().select('-password').populate('roleId', 'name').populate('designation', 'name').lean().skip(skip).limit(limit),
+    User.find().select('-password').populate('roleId', 'name permissions').lean().skip(skip).limit(limit),
     User.countDocuments(),
     ProjectMember.aggregate<{ _id: unknown; count: number }>([{ $group: { _id: '$user', count: { $sum: 1 } } }]),
   ]);
@@ -60,13 +61,12 @@ export async function update(
     const updateData: Record<string, unknown> = {};
     if (input.name !== undefined) updateData.name = input.name;
     if (Object.keys(updateData).length === 0) {
-      const user = await User.findById(id).select('-password').populate('roleId', 'name').populate('designation', 'name').lean();
+      const user = await User.findById(id).select('-password').populate('roleId', 'name').lean();
       return user ?? null;
     }
     const user = await User.findByIdAndUpdate(id, { $set: updateData }, { new: true, runValidators: true })
       .select('-password')
       .populate('roleId', 'name')
-      .populate('designation', 'name')
       .lean();
     return user ?? null;
   }
@@ -75,29 +75,38 @@ export async function update(
     throw new ApiError(403, 'You do not have permission to edit other users');
   }
 
-  // Admin update: name, roleId, designationId, enabled
+  // Admin update: name, roleId, enabled
   if (input.roleId) {
     const role = await Role.findById(input.roleId).lean();
     if (!role) throw new ApiError(400, 'Invalid role');
-  }
-  if (input.designationId) {
-    const des = await Designation.findById(input.designationId).lean();
-    if (!des) throw new ApiError(400, 'Invalid designation');
   }
 
   const updateData: Record<string, unknown> = {};
   if (input.name !== undefined) updateData.name = input.name;
   if (input.role !== undefined) updateData.role = input.role;
   if (input.roleId !== undefined) updateData.roleId = input.roleId || null;
-  if (input.designationId !== undefined) updateData.designation = input.designationId || null;
   if (input.enabled !== undefined) updateData.enabled = input.enabled;
 
   const user = await User.findByIdAndUpdate(id, { $set: updateData }, { new: true, runValidators: true })
     .select('-password')
     .populate('roleId', 'name')
-    .populate('designation', 'name')
     .lean();
 
+  return user ?? null;
+}
+
+export async function updatePermissionOverrides(
+  id: string,
+  overrides: { granted: string[]; revoked: string[] }
+): Promise<unknown | null> {
+  const user = await User.findByIdAndUpdate(
+    id,
+    { $set: { permissionOverrides: { granted: overrides.granted, revoked: overrides.revoked } } },
+    { new: true, runValidators: true }
+  )
+    .select('-password')
+    .populate('roleId', 'name permissions')
+    .lean();
   return user ?? null;
 }
 
@@ -115,22 +124,20 @@ export async function invite(input: InviteUserBody): Promise<unknown> {
   const role = await Role.findById(input.roleId).lean();
   if (!role) throw new ApiError(400, 'Invalid role');
 
-  if (input.designationId) {
-    const designation = await Designation.findById(input.designationId).lean();
-    if (!designation) throw new ApiError(400, 'Invalid designation');
-  }
-
   const plainPassword = crypto.randomBytes(10).toString('base64').replace(/[+/=]/g, '').slice(0, 14);
   const hashedPassword = await bcrypt.hash(plainPassword, SALT_ROUNDS);
 
+  const rolePermsDot = mapLegacyProjectOrGlobalPermissions(
+    Array.isArray(role.permissions) ? role.permissions : []
+  );
   const user = await User.create({
     email: input.email.toLowerCase().trim(),
     password: hashedPassword,
     name: input.name.trim(),
     role: 'user',
     roleId: input.roleId,
-    designation: input.designationId || undefined,
     mustChangePassword: true,
+    permissions: mergeTaskflowPermissionFloor(rolePermsDot),
   });
 
   await sendInviteEmail({
@@ -149,6 +156,6 @@ export async function invite(input: InviteUserBody): Promise<unknown> {
     })
     .catch((err) => console.error('Failed to create welcome message:', err));
 
-  const doc = await User.findById(user._id).select('-password').populate('roleId', 'name').populate('designation', 'name').lean();
+  const doc = await User.findById(user._id).select('-password').populate('roleId', 'name').lean();
   return doc ?? user.toObject();
 }

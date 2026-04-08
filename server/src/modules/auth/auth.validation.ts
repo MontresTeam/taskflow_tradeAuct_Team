@@ -29,6 +29,12 @@ export const changePasswordSchema = z.object({
   }),
 });
 
+export const setPasswordSchema = z.object({
+  body: z.object({
+    newPassword: z.string().min(6),
+  }),
+});
+
 export const forgotPasswordSchema = z.object({
   body: z.object({
     email: z.string().email(),

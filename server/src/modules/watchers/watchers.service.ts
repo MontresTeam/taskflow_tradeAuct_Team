@@ -101,12 +101,12 @@ export async function notifyWatchers(
           ? 'watch_status'
           : 'watch_field';
     await notificationsService.createNotification({
-      toUser,
+      userId: toUser,
       type: mappedType as any,
       title: params.title,
       body: params.body ?? '',
-      url: issueUrl,
-      meta: metaWithUrl,
+      link: issueUrl,
+      metadata: metaWithUrl,
     });
   }
 

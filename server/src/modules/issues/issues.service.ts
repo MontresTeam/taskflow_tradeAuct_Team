@@ -426,12 +426,12 @@ export async function update(
           data: { type: 'issue_assigned', issueId: id, issueKey, projectId },
         };
         notificationsService.createNotification({
-          toUser: newAssigneeId,
+          userId: newAssigneeId,
           type: 'issue_assigned',
           title: payload.title,
           body: payload.body,
-          url: issueUrl,
-          meta: payload.data,
+          link: issueUrl,
+          metadata: payload.data,
         }).catch(() => {});
         sendPushToUser(newAssigneeId, payload).catch((err) => console.error('Push failed:', err));
         notifyPush(newAssigneeId, payload);
@@ -449,12 +449,12 @@ export async function update(
           data: { type: 'issue_unassigned', issueId: id, issueKey, projectId },
         };
         notificationsService.createNotification({
-          toUser: oldAssigneeId,
+          userId: oldAssigneeId,
           type: 'issue_unassigned',
           title: payload.title,
           body: payload.body,
-          url: issueUrl,
-          meta: payload.data,
+          link: issueUrl,
+          metadata: payload.data,
         }).catch(() => {});
         sendPushToUser(oldAssigneeId, payload).catch((err) => console.error('Push failed:', err));
         notifyPush(oldAssigneeId, payload);
@@ -507,6 +507,20 @@ export async function update(
       if (assigneeId) notifyClosed(assigneeId);
       if (reporterId && reporterId !== assigneeId) notifyClosed(reporterId);
     }
+  }
+
+  // Sync customer request status when issue status changes
+  if (issue && input.status !== undefined) {
+    const project2 = await Project.findById(
+      (issue.project as { _id?: unknown })?._id
+        ? String((issue.project as { _id: unknown })._id)
+        : String(issue.project)
+    )
+      .select('statuses')
+      .lean();
+    const statuses = (project2 as { statuses?: Array<{ name: string; isClosed?: boolean }> })?.statuses ?? [];
+    const { syncIssueStatus } = await import('../customer-portal/customer-request/customerRequest.service');
+    syncIssueStatus(id, statuses, String(issue.status)).catch(() => {});
   }
 
   return issue ? withIssueKey(issue as { _id: unknown; key?: string; project?: { key?: string } }) : null;

@@ -8,6 +8,8 @@ import MetricCard from '../components/MetricCard';
 import SectionCard from '../components/SectionCard';
 import { formatMinutes } from '../components/issue/WorkLogInput';
 import { formatDateDDMMYYYY } from '../lib/dateFormat';
+import { userHasPermission } from '../utils/permissions';
+import { PROJECT_PERMISSIONS } from '@shared/constants/permissions';
 
 const DEFAULT_STATUSES = ['Backlog', 'Todo', 'In Progress', 'Done'];
 const STATUS_COLORS: string[] = ['#4f46e5', '#06b6d4', '#22c55e', '#f97316', '#e11d48', '#8b5cf6'];
@@ -157,7 +159,7 @@ export default function ProjectDashboard() {
     projectsApi.getMyPermissions(projectId, token).then((res) => {
       if (res.success && res.data && 'permissions' in res.data) {
         const perms = (res.data as { permissions: string[] }).permissions ?? [];
-        setCanManageSettings(perms.includes('settings:manage'));
+        setCanManageSettings(userHasPermission(perms, PROJECT_PERMISSIONS.SETTING.PROJECT_SETTING.UPDATE));
       }
     });
   }, [token, projectId, refreshTrigger]);

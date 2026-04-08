@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { Project } from './project.model';
 import { ProjectMember } from './projectMember.model';
+import { ProjectDesignation } from './projectDesignation.model';
 import { ProjectInvitation } from './projectInvitation.model';
 import { Role } from '../roles/role.model';
 import { User } from '../auth/user.model';
@@ -10,6 +11,7 @@ import {
   DEFAULT_PROJECT_MEMBER_PERMISSION_CODES,
   FULL_PROJECT_ROLE_PERMISSION_CODES,
 } from '../../constants/permissions';
+import { mapLegacyProjectOrGlobalPermissions } from '../../shared/constants/legacyPermissionMap';
 import * as inboxService from '../inbox/inbox.service';
 import { sendProjectInviteEmail } from '../../services/email.service';
 import { sendPushToUser } from '../../services/push.service';
@@ -18,6 +20,19 @@ import * as notificationsService from '../notifications/notifications.service';
 
 const PROJECT_MEMBER_ROLE_NAME = 'Project Member';
 const PROJECT_LEAD_ROLE_NAME = 'Project Lead';
+
+const FULL_PROJECT_PERMS_DOT = mapLegacyProjectOrGlobalPermissions([...FULL_PROJECT_ROLE_PERMISSION_CODES]);
+const DEFAULT_MEMBER_PERMS_DOT = mapLegacyProjectOrGlobalPermissions([...DEFAULT_PROJECT_MEMBER_PERMISSION_CODES]);
+
+async function snapshotFromRoleId(roleId: unknown): Promise<string[]> {
+  const id =
+    roleId && typeof roleId === 'object' && '_id' in (roleId as object)
+      ? (roleId as { _id: mongoose.Types.ObjectId })._id
+      : roleId;
+  const role = await Role.findById(id).select('permissions').lean();
+  const raw = Array.isArray(role?.permissions) ? role.permissions : [];
+  return mapLegacyProjectOrGlobalPermissions(raw);
+}
 
 /** Syncs the "Project Member" role permissions to the default (no project:edit / project:delete). Call once per process so existing DB roles are updated. */
 export async function syncProjectMemberRolePermissions(): Promise<void> {
@@ -72,26 +87,40 @@ export async function downgradeToProjectMemberIfHasLeadRole(projectId: string, u
       ? String((m.role as { _id: unknown })._id)
       : String(m.role);
   if (roleId === String(leadRole._id)) {
-    await ProjectMember.updateOne({ _id: m._id }, { $set: { role: memberRole._id } });
+    await ProjectMember.updateOne(
+      { _id: m._id },
+      { $set: { role: memberRole._id, permissions: DEFAULT_MEMBER_PERMS_DOT } }
+    );
   }
 }
 
 /** Ensures the user is a project member with full project permissions (e.g. after assigning them as lead). */
 export async function ensureUserHasFullProjectAccess(projectId: string, userId: string): Promise<void> {
-  const leadRole = await getOrCreateProjectLeadRole();
+  const leadDesignation = await ProjectDesignation.findOne({ projectId, code: 'project_lead' }).lean();
+  
   const userObjectId = mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : userId;
   const projectObjectId = mongoose.Types.ObjectId.isValid(projectId)
     ? new mongoose.Types.ObjectId(projectId)
     : projectId;
+    
   const existing = await ProjectMember.findOne({ project: projectObjectId, user: userObjectId }).lean();
   if (existing) {
-    await ProjectMember.updateOne({ _id: existing._id }, { $set: { role: leadRole._id } });
+    await ProjectMember.updateOne(
+      { _id: existing._id },
+      { 
+        $set: { 
+          designationId: leadDesignation?._id,
+          permissions: leadDesignation?.permissions || FULL_PROJECT_PERMS_DOT 
+        } 
+      }
+    );
     return;
   }
   await ProjectMember.create({
     project: projectObjectId,
     user: userObjectId,
-    role: leadRole._id,
+    designationId: leadDesignation?._id,
+    permissions: leadDesignation?.permissions || FULL_PROJECT_PERMS_DOT,
   });
 }
 
@@ -173,10 +202,39 @@ export async function inviteToProject(
 
 export async function listMembers(projectId: string): Promise<unknown[]> {
   const members = await ProjectMember.find({ project: projectId })
-    .populate('user', 'name email')
-    .populate('role', 'name')
+    .populate('user', 'name email avatarUrl')
+    .populate('designationId', 'name code permissions isSystem')
     .lean();
   return members;
+}
+
+export async function updateMemberDesignation(projectId: string, memberId: string, designationId: string) {
+  const member = await ProjectMember.findOne({ _id: memberId, project: projectId });
+  if (!member) throw new ApiError(404, 'Member not found');
+
+  const designation = await ProjectDesignation.findOne({ _id: designationId, projectId }).lean();
+  if (!designation) throw new ApiError(404, 'Designation not found');
+
+  member.designationId = new mongoose.Types.ObjectId(designationId);
+  member.permissions = designation.permissions;
+  await member.save();
+
+  return ProjectMember.findById(memberId)
+    .populate('user', 'name email avatarUrl')
+    .populate('designationId', 'name code permissions isSystem')
+    .lean();
+}
+
+export async function removeMember(projectId: string, memberId: string) {
+  const member = await ProjectMember.findOne({ _id: memberId, project: projectId }).populate('user', 'email').lean();
+  if (!member) throw new ApiError(404, 'Member not found');
+
+  const project = await Project.findById(projectId).select('lead').lean();
+  if (project && String(project.lead) === String((member.user as any)._id)) {
+    throw new ApiError(400, 'Cannot remove the project lead');
+  }
+
+  await ProjectMember.findByIdAndDelete(memberId);
 }
 
 export async function listInvitations(projectId: string): Promise<unknown[]> {
@@ -222,10 +280,12 @@ export async function acceptInvitation(invitationId: string, userId: string): Pr
   const inviteeName = (invitation.user as { name?: string })?.name ?? 'A user';
   const inviterId = (invitation.invitedBy as { _id?: unknown })._id?.toString?.() ?? String(invitation.invitedBy);
 
+  const permSnapshot = await snapshotFromRoleId(invitation.role);
   await ProjectMember.create({
     project: new mongoose.Types.ObjectId(projectId),
     user: new mongoose.Types.ObjectId(userId),
     role: invitation.role,
+    permissions: permSnapshot,
   });
   await ProjectInvitation.findByIdAndUpdate(invitationId, { $set: { status: 'accepted' } });
 
@@ -248,12 +308,12 @@ export async function acceptInvitation(invitationId: string, userId: string): Pr
     meta: { projectId, inviteeId, invitationId },
   });
   notificationsService.createNotification({
-    toUser: inviterId,
+    userId: inviterId,
     type: 'invitation_accepted',
     title: acceptanceTitle,
     body: acceptanceBody,
-    url: `${env.appUrl}/projects/${projectId}/settings`,
-    meta: { projectId, inviteeId, invitationId },
+    link: `${env.appUrl}/projects/${projectId}/settings`,
+    metadata: { projectId, inviteeId, invitationId },
   }).catch(() => {});
 
   const superAdminRole = await Role.findOne({ name: 'Super Admin' }).select('_id').lean();
@@ -272,12 +332,12 @@ export async function acceptInvitation(invitationId: string, userId: string): Pr
         meta: { projectId, inviteeId, invitationId },
       });
       notificationsService.createNotification({
-        toUser: toUserId,
+        userId: toUserId,
         type: 'invitation_accepted',
         title: acceptanceTitle,
         body: superAdminBody,
-        url: `${env.appUrl}/projects/${projectId}/settings`,
-        meta: { projectId, inviteeId, invitationId },
+        link: `${env.appUrl}/projects/${projectId}/settings`,
+        metadata: { projectId, inviteeId, invitationId },
       }).catch(() => {});
     }
   }

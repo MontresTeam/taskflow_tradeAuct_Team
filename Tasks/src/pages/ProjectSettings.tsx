@@ -48,6 +48,8 @@ import {
   FiSettings,
   FiShield,
   FiSliders,
+  FiPlus,
+  FiEdit2,
   FiSun,
   FiMoon,
   FiTerminal,
@@ -81,12 +83,25 @@ import {
   type ProjectReleaseRule,
   type ProjectMember,
   type ProjectInvitation,
+  type ProjectDesignation,
   type CustomFieldType,
   type Milestone,
 } from '../lib/api';
 import { EditIcon, TrashIcon } from '../components/icons/NavigationIcons';
+import { userHasPermission } from '../utils/permissions';
+import { PROJECT_PERMISSIONS } from '@shared/constants/permissions';
 
-type TabId = 'general' | 'statuses' | 'issueTypes' | 'priorities' | 'customFields' | 'environments' | 'releaseRules' | 'milestones' | 'members';
+type TabId =
+  | 'general'
+  | 'statuses'
+  | 'issueTypes'
+  | 'priorities'
+  | 'customFields'
+  | 'environments'
+  | 'releaseRules'
+  | 'milestones'
+  | 'members'
+  | 'designations';
 
 const ICON_COMPONENTS = {
   circle: FiCircle,
@@ -226,6 +241,35 @@ const CUSTOM_FIELD_TYPES: { value: CustomFieldType; label: string }[] = [
   { value: 'user', label: 'User' },
 ];
 
+const ALL_PROJECT_PERMISSIONS_LIST = [
+  { code: PROJECT_PERMISSIONS.SCOPE.DELETE, label: 'Delete Project' },
+  { code: PROJECT_PERMISSIONS.ISSUE.ISSUE.CREATE, label: 'Create Issues' },
+  { code: PROJECT_PERMISSIONS.ISSUE.ISSUE.READ, label: 'View Issues' },
+  { code: PROJECT_PERMISSIONS.ISSUE.ISSUE.UPDATE, label: 'Update Issues' },
+  { code: PROJECT_PERMISSIONS.ISSUE.ISSUE.DELETE, label: 'Delete Issues' },
+  { code: PROJECT_PERMISSIONS.ISSUE.COMMENT.CREATE, label: 'Create Comments' },
+  { code: PROJECT_PERMISSIONS.ISSUE.COMMENT.READ, label: 'View Comments' },
+  { code: PROJECT_PERMISSIONS.ISSUE.COMMENT.UPDATE, label: 'Update Comments' },
+  { code: PROJECT_PERMISSIONS.ISSUE.COMMENT.DELETE, label: 'Delete Comments' },
+  { code: PROJECT_PERMISSIONS.ISSUE.ATTACHMENT.CREATE, label: 'Upload Attachments' },
+  { code: PROJECT_PERMISSIONS.ISSUE.ATTACHMENT.READ, label: 'View Attachments' },
+  { code: PROJECT_PERMISSIONS.ISSUE.ATTACHMENT.DELETE, label: 'Delete Attachments' },
+  { code: PROJECT_PERMISSIONS.BOARD.BOARD.READ, label: 'View Boards' },
+  { code: PROJECT_PERMISSIONS.BOARD.BOARD.UPDATE, label: 'Update Boards' },
+  { code: PROJECT_PERMISSIONS.SPRINT.SPRINT.CREATE, label: 'Create Sprints' },
+  { code: PROJECT_PERMISSIONS.SPRINT.SPRINT.READ, label: 'View Sprints' },
+  { code: PROJECT_PERMISSIONS.SPRINT.SPRINT.UPDATE, label: 'Update Sprints' },
+  { code: PROJECT_PERMISSIONS.SPRINT.SPRINT.DELETE, label: 'Delete Sprints' },
+  { code: PROJECT_PERMISSIONS.SPRINT.SPRINT.START, label: 'Start Sprints' },
+  { code: PROJECT_PERMISSIONS.SPRINT.SPRINT.CLOSE, label: 'Close Sprints' },
+  { code: PROJECT_PERMISSIONS.VERSION.VERSION.READ, label: 'View Versions' },
+  { code: PROJECT_PERMISSIONS.VERSION.VERSION.UPDATE, label: 'Update Versions' },
+  { code: PROJECT_PERMISSIONS.VERSION.VERSION.RELEASE, label: 'Release Versions' },
+  { code: PROJECT_PERMISSIONS.SETTING.PROJECT_SETTING.READ, label: 'View Settings' },
+  { code: PROJECT_PERMISSIONS.SETTING.PROJECT_SETTING.UPDATE, label: 'Update Settings' },
+  { code: PROJECT_PERMISSIONS.MEMBER.INVITATIONS_MANAGE, label: 'Manage Invitations' },
+];
+
 const TABS: { id: TabId; label: string; description: string }[] = [
   { id: 'general', label: 'General', description: 'Name, key, description & lead' },
   { id: 'statuses', label: 'Statuses', description: 'Workflow states for issues' },
@@ -236,6 +280,7 @@ const TABS: { id: TabId; label: string; description: string }[] = [
   { id: 'releaseRules', label: 'Release rules', description: 'Env → issue status for releases' },
   { id: 'milestones', label: 'Milestones', description: 'Project milestones for roadmap' },
   { id: 'members', label: 'Members', description: 'Invite and manage people' },
+  { id: 'designations', label: 'Designations', description: 'Project-specific roles' },
 ];
 
 export function MetaIconGlyph({ icon, className }: { icon?: string; className?: string }) {
@@ -513,14 +558,29 @@ export default function ProjectSettings() {
 
   const [projectPermissions, setProjectPermissions] = useState<string[]>([]);
   const [members, setMembers] = useState<ProjectMember[]>([]);
+  const [designations, setDesignations] = useState<ProjectDesignation[]>([]);
   const [invitations, setInvitations] = useState<ProjectInvitation[]>([]);
   const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteDesignationId, setInviteDesignationId] = useState('');
   const [inviting, setInviting] = useState(false);
   const [membersLoading, setMembersLoading] = useState(false);
   const [inviteError, setInviteError] = useState('');
   const [cancelLoadingId, setCancelLoadingId] = useState<string | null>(null);
   const [inviteAutocompleteOpen, setInviteAutocompleteOpen] = useState(false);
   const inviteAutocompleteRef = useRef<HTMLDivElement>(null);
+
+  // Designation management
+  const [designationEdit, setDesignationEdit] = useState<ProjectDesignation | null>(null);
+  const [designationForm, setDesignationForm] = useState({ name: '', permissions: [] as string[] });
+  const [designationModalOpen, setDesignationModalOpen] = useState(false);
+  const [designationSaving, setDesignationSaving] = useState(false);
+  const [designationError, setDesignationError] = useState('');
+
+  // Member update
+  const [memberEdit, setMemberEdit] = useState<ProjectMember | null>(null);
+  const [memberEditDesignationId, setMemberEditDesignationId] = useState('');
+  const [memberSaving, setMemberEditSaving] = useState(false);
+  const [memberError, setMemberEditError] = useState('');
 
   const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
   const [saveTemplateName, setSaveTemplateName] = useState('');
@@ -584,18 +644,27 @@ export default function ProjectSettings() {
   }, [projectId, token]);
 
   useEffect(() => {
-    if (!projectId || !token || tab !== 'members') return;
+    if (!projectId || !token || (tab !== 'members' && tab !== 'designations')) return;
     setMembersLoading(true);
     setInviteError('');
     Promise.all([
       projectsApi.getMembers(projectId, token),
       projectsApi.getInvitations(projectId, token),
-    ]).then(([membersRes, invitationsRes]) => {
+      projectsApi.listDesignations(projectId, token),
+    ]).then(([membersRes, invitationsRes, designationsRes]) => {
       setMembersLoading(false);
       if (membersRes.success && membersRes.data) setMembers(Array.isArray(membersRes.data) ? membersRes.data : []);
       else setMembers([]);
       if (invitationsRes.success && invitationsRes.data) setInvitations(Array.isArray(invitationsRes.data) ? invitationsRes.data : []);
       else setInvitations([]);
+      if (designationsRes.success && designationsRes.data) {
+        setDesignations(Array.isArray(designationsRes.data) ? designationsRes.data : []);
+        if (designationsRes.data.length > 0 && !inviteDesignationId) {
+          const def = designationsRes.data.find(d => d.code === 'project_member');
+          setInviteDesignationId(def ? def._id : designationsRes.data[0]._id);
+        }
+      }
+      else setDesignations([]);
     });
   }, [projectId, token, tab]);
 
@@ -984,7 +1053,7 @@ export default function ProjectSettings() {
     if (!token || !projectId || !inviteEmail.trim()) return;
     setInviting(true);
     setInviteError('');
-    const res = await projectsApi.inviteMember(projectId, { email: inviteEmail.trim() }, token);
+    const res = await projectsApi.inviteMember(projectId, { email: inviteEmail.trim(), designationId: inviteDesignationId || undefined }, token);
     setInviting(false);
     if (res.success) {
       setInviteEmail('');
@@ -995,6 +1064,56 @@ export default function ProjectSettings() {
       if (membersRes.success && membersRes.data) setMembers(Array.isArray(membersRes.data) ? membersRes.data : []);
       if (invitationsRes.success && invitationsRes.data) setInvitations(Array.isArray(invitationsRes.data) ? invitationsRes.data : []);
     } else setInviteError((res as { message?: string }).message ?? 'Invite failed');
+  }
+
+  async function handleUpdateMember() {
+    if (!token || !projectId || !memberEdit) return;
+    setMemberEditSaving(true);
+    setMemberEditError('');
+    const res = await projectsApi.updateMember(projectId, memberEdit._id, { designationId: memberEditDesignationId }, token);
+    setMemberEditSaving(false);
+    if (res.success) {
+      setMemberEdit(null);
+      const membersRes = await projectsApi.getMembers(projectId, token);
+      if (membersRes.success && membersRes.data) setMembers(membersRes.data);
+    } else setMemberEditError((res as { message?: string }).message ?? 'Update failed');
+  }
+
+  async function handleRemoveMember(memberId: string) {
+    if (!token || !projectId) return;
+    const res = await projectsApi.removeMember(projectId, memberId, token);
+    if (res.success) {
+      const membersRes = await projectsApi.getMembers(projectId, token);
+      if (membersRes.success && membersRes.data) setMembers(membersRes.data);
+    }
+  }
+
+  async function saveDesignation() {
+    if (!token || !projectId) return;
+    setDesignationSaving(true);
+    setDesignationError('');
+    const res = designationEdit
+      ? await projectsApi.updateDesignation(projectId, designationEdit._id, designationForm, token)
+      : await projectsApi.createDesignation(projectId, designationForm, token);
+    setDesignationSaving(false);
+    if (res.success) {
+      setDesignationModalOpen(false);
+      setDesignationEdit(null);
+      const desigRes = await projectsApi.listDesignations(projectId, token);
+      if (desigRes.success && desigRes.data) setDesignations(desigRes.data);
+    } else setDesignationError((res as { message?: string }).message ?? 'Save failed');
+  }
+
+  async function removeDesignation(id: string) {
+    if (!token || !projectId) return;
+    const res = await projectsApi.deleteDesignation(projectId, id, token);
+    if (res.success) {
+      const desigRes = await projectsApi.listDesignations(projectId, token);
+      if (desigRes.success && desigRes.data) setDesignations(desigRes.data);
+      // Refresh members as some might have been reassigned
+      const membersRes = await projectsApi.getMembers(projectId, token);
+      if (membersRes.success && membersRes.data) setMembers(membersRes.data);
+    }
   }
 
   async function handleCancelInvitation(invitationId: string) {
@@ -1074,7 +1193,7 @@ export default function ProjectSettings() {
             <div>
               <h1 className="text-xl lg:text-2xl font-semibold text-[color:var(--text-primary)] tracking-tight">Project settings</h1>
               <p className="text-[color:var(--text-muted)] text-sm mt-1">Manage how this project works for your team.</p>
-              {projectPermissions.includes('settings:manage') && (
+              {userHasPermission(projectPermissions, PROJECT_PERMISSIONS.SETTING.PROJECT_SETTING.UPDATE) && (
                 <div className="flex flex-wrap items-center gap-3 mt-3">
                   <button
                     type="button"
@@ -1109,7 +1228,11 @@ export default function ProjectSettings() {
           {/* Sidebar nav */}
           <nav className="lg:w-56 shrink-0">
             <div className="flex lg:flex-col gap-1 p-1 rounded-2xl bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] overflow-x-auto lg:overflow-visible">
-              {TABS.filter((t) => t.id !== 'members' || projectPermissions.includes('project:manageMembers')).map((t) => (
+              {TABS.filter(
+                (t) =>
+                  t.id !== 'members' ||
+                  userHasPermission(projectPermissions, PROJECT_PERMISSIONS.MEMBER.INVITATIONS_MANAGE)
+              ).map((t) => (
                 <button
                   key={t.id}
                   type="button"
@@ -2118,34 +2241,64 @@ export default function ProjectSettings() {
                       </div>
                     ) : (
                       <div className="rounded-xl border border-[color:var(--border-subtle)] overflow-hidden">
-                        <table className="w-full text-left">
+                        <table className="w-full text-left text-sm">
                           <thead>
                             <tr className="border-b border-[color:var(--border-subtle)]/80 bg-[color:var(--bg-page)]">
-                              <th className="px-4 py-2 text-[11px] font-medium text-[color:var(--text-muted)] uppercase tracking-wide">
-                                Name
-                              </th>
-                              <th className="px-4 py-2 text-[11px] font-medium text-[color:var(--text-muted)] uppercase tracking-wide">
-                                Email
-                              </th>
-                              <th className="px-4 py-2 text-[11px] font-medium text-[color:var(--text-muted)] uppercase tracking-wide">
-                                Role
-                              </th>
+                              <th className="px-4 py-2 text-[11px] font-medium text-[color:var(--text-muted)] uppercase tracking-wide">Member</th>
+                              <th className="px-4 py-2 text-[11px] font-medium text-[color:var(--text-muted)] uppercase tracking-wide">Designation</th>
+                              <th className="px-4 py-2 text-[11px] font-medium text-[color:var(--text-muted)] uppercase tracking-wide">Joined</th>
+                              <th className="px-4 py-2 text-[11px] font-medium text-[color:var(--text-muted)] uppercase tracking-wide text-right">Actions</th>
                             </tr>
                           </thead>
-                          <tbody>
-                            {members.map((mem) => (
-                              <tr
-                                key={mem._id}
-                                className="border-b border-[color:var(--border-subtle)]/70 last:border-0 bg-[color:var(--bg-surface)]"
-                              >
-                                <td className="px-4 py-2 text-[color:var(--text-primary)] text-sm font-medium">
-                                  {typeof mem.user === 'object' && mem.user ? mem.user.name : '-'}
+                          <tbody className="divide-y divide-[color:var(--border-subtle)]/70">
+                            {members.map((m) => (
+                              <tr key={m._id} className="bg-[color:var(--bg-surface)] hover:bg-[color:var(--bg-elevated)] transition">
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center gap-3">
+                                    <div className="w-8 h-8 rounded-full bg-[color:var(--accent)]/20 flex items-center justify-center text-xs font-semibold text-[color:var(--accent)] shrink-0">
+                                      {m.user.avatarUrl ? (
+                                        <img src={m.user.avatarUrl} alt={m.user.name} className="w-8 h-8 rounded-full object-cover" />
+                                      ) : m.user.name.charAt(0).toUpperCase()}
+                                    </div>
+                                    <div className="min-w-0">
+                                      <p className="font-medium text-[color:var(--text-primary)] truncate">{m.user.name}</p>
+                                      <p className="text-[11px] text-[color:var(--text-muted)] truncate">{m.user.email}</p>
+                                    </div>
+                                  </div>
                                 </td>
-                                <td className="px-4 py-2 text-[color:var(--text-muted)] text-xs">
-                                  {typeof mem.user === 'object' && mem.user && 'email' in mem.user ? mem.user.email : '-'}
+                                <td className="px-4 py-3">
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-[color:var(--bg-page)] text-[color:var(--text-primary)] border border-[color:var(--border-subtle)]">
+                                    {typeof m.designationId === 'object' ? m.designationId.name : 'No Designation'}
+                                  </span>
                                 </td>
-                                <td className="px-4 py-2 text-[color:var(--text-muted)] text-xs">
-                                  {typeof mem.role === 'object' && mem.role ? mem.role.name : '-'}
+                                <td className="px-4 py-3 text-[color:var(--text-muted)] text-xs whitespace-nowrap">
+                                  {m.createdAt ? formatDateDDMMYYYY(m.createdAt) : '—'}
+                                </td>
+                                <td className="px-4 py-3 text-right">
+                                  <div className="flex items-center justify-end gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setMemberEdit(m);
+                                        setMemberEditDesignationId(typeof m.designationId === 'object' ? m.designationId._id : (m.designationId || ''));
+                                        setMemberEditError('');
+                                      }}
+                                      className="p-1.5 rounded-lg text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)] hover:bg-[color:var(--bg-page)] transition"
+                                      title="Update role"
+                                    >
+                                      <FiEdit2 className="w-3.5 h-3.5" />
+                                    </button>
+                                    {project.lead && String(project.lead._id) !== String(m.user._id) && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRemoveMember(m._id)}
+                                        className="p-1.5 rounded-lg text-[color:var(--text-muted)] hover:text-red-400 hover:bg-red-500/10 transition"
+                                        title="Remove member"
+                                      >
+                                        <FiTrash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
                                 </td>
                               </tr>
                             ))}
@@ -2197,7 +2350,177 @@ export default function ProjectSettings() {
                 </div>
               </div>
             )}
+
+            {tab === 'designations' && (
+              <div className="rounded-2xl bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] overflow-hidden">
+                <div className="p-6 border-b border-[color:var(--border-subtle)] flex items-center justify-between">
+                  <div>
+                    <h2 className="text-sm font-semibold text-[color:var(--text-primary)]">Designations</h2>
+                    <p className="text-[color:var(--text-muted)] text-xs mt-0.5">Define project-specific roles and their permissions.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDesignationEdit(null);
+                      setDesignationForm({ name: '', permissions: [] });
+                      setDesignationModalOpen(true);
+                    }}
+                    className="btn-primary text-xs flex items-center gap-2"
+                  >
+                    <FiPlus /> Add Designation
+                  </button>
+                </div>
+                <div className="p-6 space-y-3">
+                  {designations.map((d) => (
+                    <div key={d._id} className="rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--bg-page)] p-4 flex items-start justify-between gap-4 group">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <p className="font-semibold text-[color:var(--text-primary)] text-sm">{d.name}</p>
+                          {d.isSystem && (
+                            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-[color:var(--accent)]/10 text-[color:var(--accent)] uppercase tracking-wider">System</span>
+                          )}
+                        </div>
+                        <p className="text-xs text-[color:var(--text-muted)]">
+                          {d.permissions.length} permission{d.permissions.length !== 1 ? 's' : ''}
+                        </p>
+                        <div className="flex flex-wrap gap-1 mt-2">
+                          {d.permissions.slice(0, 5).map((p: string) => (
+                            <span key={p} className="text-[10px] px-1.5 py-0.5 rounded bg-[color:var(--bg-elevated)] border border-[color:var(--border-subtle)] text-[color:var(--text-muted)] font-mono">
+                              {p.split('.').pop()}
+                            </span>
+                          ))}
+                          {d.permissions.length > 5 && (
+                            <span className="text-[10px] text-[color:var(--text-muted)] font-medium">+{d.permissions.length - 5} more</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition shrink-0">
+                        <button
+                          onClick={() => {
+                            setDesignationEdit(d);
+                            setDesignationForm({ name: d.name, permissions: d.permissions });
+                            setDesignationModalOpen(true);
+                          }}
+                          className="p-1.5 rounded-lg text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)] hover:bg-[color:var(--bg-surface)] transition"
+                        >
+                          <FiEdit2 className="w-3.5 h-3.5" />
+                        </button>
+                        {!d.isSystem && (
+                          <button
+                            onClick={() => removeDesignation(d._id)}
+                            className="p-1.5 rounded-lg text-[color:var(--text-muted)] hover:text-red-400 hover:bg-red-500/10 transition"
+                          >
+                            <FiTrash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </main>
+
+          {/* Designation Modal */}
+          {designationModalOpen && createPortal(
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setDesignationModalOpen(false)}>
+              <div className="w-full max-w-2xl bg-[color:var(--bg-elevated)] border border-[color:var(--border-subtle)] rounded-2xl shadow-2xl animate-scale-in flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+                <div className="p-6 border-b border-[color:var(--border-subtle)] flex items-center justify-between shrink-0">
+                  <h3 className="text-lg font-semibold text-[color:var(--text-primary)]">
+                    {designationEdit ? `Edit Designation — ${designationEdit.name}` : 'Create Designation'}
+                  </h3>
+                  <button onClick={() => setDesignationModalOpen(false)} className="text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]"><FiX /></button>
+                </div>
+                <div className="p-6 overflow-y-auto flex-1 custom-scrollbar">
+                  {designationError && (
+                    <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
+                      {designationError}
+                    </div>
+                  )}
+                  <div className="space-y-6">
+                    <div>
+                      <label className={labelClass}>Designation Name</label>
+                      <input
+                        type="text"
+                        value={designationForm.name}
+                        onChange={e => setDesignationForm(f => ({ ...f, name: e.target.value }))}
+                        disabled={designationEdit?.isSystem}
+                        className={inputClass}
+                        placeholder="e.g. Quality Analyst"
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass}>Permissions</label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
+                        {ALL_PROJECT_PERMISSIONS_LIST.map(p => (
+                          <label key={p.code} className="flex items-center gap-2.5 cursor-pointer group">
+                            <input
+                              type="checkbox"
+                              checked={designationForm.permissions.includes(p.code)}
+                              onChange={() => {
+                                setDesignationForm(f => ({
+                                  ...f,
+                                  permissions: f.permissions.includes(p.code)
+                                    ? f.permissions.filter(x => x !== p.code)
+                                    : [...f.permissions, p.code]
+                                }));
+                              }}
+                              className="w-4 h-4 rounded border-[color:var(--border-subtle)] accent-[color:var(--accent)]"
+                            />
+                            <div className="min-w-0">
+                              <p className="text-sm text-[color:var(--text-primary)] group-hover:text-[color:var(--accent)] transition">{p.label}</p>
+                              <p className="text-[10px] text-[color:var(--text-muted)] font-mono truncate">{p.code}</p>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="p-6 border-t border-[color:var(--border-subtle)] flex justify-end gap-3 shrink-0">
+                  <button onClick={() => setDesignationModalOpen(false)} className="btn-secondary text-sm">Cancel</button>
+                  <button onClick={saveDesignation} disabled={designationSaving || !designationForm.name.trim()} className="btn-primary text-sm min-w-[100px]">
+                    {designationSaving ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
+
+          {/* Member Edit Modal */}
+          {memberEdit && createPortal(
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setMemberEdit(null)}>
+              <div className="w-full max-w-md bg-[color:var(--bg-elevated)] border border-[color:var(--border-subtle)] rounded-2xl shadow-2xl animate-scale-in p-6" onClick={e => e.stopPropagation()}>
+                <h3 className="text-lg font-semibold text-[color:var(--text-primary)] mb-1">Update Member</h3>
+                <p className="text-sm text-[color:var(--text-muted)] mb-6">{memberEdit.user.name} ({memberEdit.user.email})</p>
+                
+                <div className="space-y-4">
+                  <div>
+                    <label className={labelClass}>Project Designation</label>
+                    <select
+                      value={memberEditDesignationId}
+                      onChange={e => setMemberEditDesignationId(e.target.value)}
+                      className={inputClass}
+                    >
+                      <option value="">Select a designation…</option>
+                      {designations.map(d => (
+                        <option key={d._id} value={d._id}>{d.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {memberError && <p className="text-xs text-red-400">{memberError}</p>}
+                  <div className="flex justify-end gap-3 pt-2">
+                    <button onClick={() => setMemberEdit(null)} className="btn-secondary text-sm">Cancel</button>
+                    <button onClick={handleUpdateMember} disabled={memberSaving || !memberEditDesignationId} className="btn-primary text-sm min-w-[100px]">
+                      {memberSaving ? 'Updating…' : 'Update'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
 
           {saveTemplateOpen &&
             createPortal(

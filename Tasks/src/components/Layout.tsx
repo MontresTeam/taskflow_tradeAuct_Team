@@ -64,47 +64,72 @@ function buildGlobalNav(user: { mustChangePassword?: boolean; permissions?: stri
   if (user?.role === 'admin') {
     nav.push({ to: '/audit-logs', label: 'Audit logs', icon: <SettingsIcon /> });
   }
-  if (perms.includes('analytics:view')) {
+  const has = (p: string) => perms.includes(p);
+  if (has('taskflow.analytics.view') || has('analytics:view')) {
     nav.push({ to: '/analytics', label: 'Analytics', icon: <SettingsIcon /> });
   }
-  if (perms.includes('reports:view')) {
+  if (has('taskflow.report.read') || has('reports:view')) {
     nav.push({ to: '/reports', label: 'Reports', icon: <SettingsIcon /> });
   }
-  if (perms.includes('issues:view')) {
+  if (has('issue.issue.read') || has('issues:view')) {
     nav.push({ to: '/cost-usage', label: 'Cost report', icon: <TimesheetIcon /> });
   }
-  if (perms.includes('users:list') || perms.includes('users:invite')) {
+  if (has('auth.user.list') || has('auth.user.create') || has('users:list') || has('users:invite')) {
     nav.push({ to: '/users', label: 'Users', icon: <UsersIcon /> });
   }
-  if (perms.includes('designations:manage')) {
-    nav.push({ to: '/designations', label: 'Designations', icon: <DesignationsIcon /> });
-  }
-  if (perms.includes('roles:manage')) {
+  if (has('auth.role.manage_all') || has('roles:manage')) {
     nav.push({ to: '/roles', label: 'Roles', icon: <RolesIcon /> });
+  }
+  if (
+    has('taskflow.customer_portal.org.manage') ||
+    has('taskflow.customer_portal.org.view') ||
+    has('customers:manage') ||
+    has('customers:view')
+  ) {
+    nav.push({ to: '/admin/customer-orgs', label: 'Customer Orgs', icon: <UsersIcon /> });
+  }
+  if (has('taskflow.customer_portal.request.approve') || has('customer-requests:approve')) {
+    nav.push({ to: '/admin/customer-requests', label: 'Customer Requests', icon: <IssuesIcon /> });
   }
   nav.push({ to: '/profile', label: 'Profile', icon: <ProfileIcon /> });
   return nav;
 }
 
-const PROJECT_NAV_ITEMS: { to: string; label: string; icon: ReactNode; permission: string; global?: boolean }[] = [
-  { to: '/dashboard', label: 'Dashboard', icon: <DashboardIcon />, permission: 'project:view' },
-  { to: '/issues', label: 'Issues', icon: <IssuesIcon />, permission: 'issues:view' },
-  { to: '/boards', label: 'Boards', icon: <BoardsIcon />, permission: 'boards:view' },
-  { to: '/backlog', label: 'Backlog', icon: <BoardsIcon />, permission: 'sprints:view' },
-  { to: '/sprints', label: 'Sprints', icon: <SprintsIcon />, permission: 'sprints:view' },
-  { to: '/gantt', label: 'Gantt', icon: <GanttIcon />, permission: 'issues:view' },
-  { to: '/roadmap', label: 'Roadmap', icon: <GanttIcon />, permission: 'roadmaps:view' },
-  { to: '/versions', label: 'Versions', icon: <VersionsIcon />, permission: 'versions:view' },
-  { to: '/timesheet', label: 'Timesheet', icon: <TimesheetIcon />, permission: 'project:view' },
-  { to: '/settings', label: 'Settings', icon: <SettingsIcon />, permission: 'settings:manage' },
+const PROJECT_NAV_ITEMS: { to: string; label: string; icon: ReactNode; permission: string; global?: boolean; globalPerm?: boolean }[] = [
+  { to: '/dashboard', label: 'Dashboard', icon: <DashboardIcon />, permission: 'issue.issue.read' },
+  { to: '/issues', label: 'Issues', icon: <IssuesIcon />, permission: 'issue.issue.read' },
+  { to: '/boards', label: 'Boards', icon: <BoardsIcon />, permission: 'board.board.read' },
+  { to: '/backlog', label: 'Backlog', icon: <BoardsIcon />, permission: 'sprint.sprint.read' },
+  { to: '/sprints', label: 'Sprints', icon: <SprintsIcon />, permission: 'sprint.sprint.read' },
+  { to: '/gantt', label: 'Gantt', icon: <GanttIcon />, permission: 'issue.issue.read' },
+  { to: '/roadmap', label: 'Roadmap', icon: <GanttIcon />, permission: 'roadmap.roadmap.read' },
+  { to: '/versions', label: 'Versions', icon: <VersionsIcon />, permission: 'version.version.read' },
+  { to: '/timesheet', label: 'Timesheet', icon: <TimesheetIcon />, permission: 'issue.issue.read' },
+  { to: '/settings', label: 'Settings', icon: <SettingsIcon />, permission: 'setting.project_setting.update' },
 ];
 
-function projectNav(projectId: string, projectPermissions: string[]) {
+function projectNav(projectId: string, projectPermissions: string[], globalPermissions: string[]) {
   const base = `/projects/${projectId}`;
+  const pp = projectPermissions;
+  const gp = globalPermissions;
+  const can = (item: (typeof PROJECT_NAV_ITEMS)[number]) => {
+    if (item.globalPerm) {
+      return gp.includes(item.permission) || gp.includes('taskflow.hr.designation.manage') || gp.includes('designations:manage');
+    }
+    return (
+      pp.includes(item.permission) ||
+      (item.permission === 'issue.issue.read' && (pp.includes('project:view') || pp.includes('issues:view'))) ||
+      (item.permission === 'board.board.read' && pp.includes('boards:view')) ||
+      (item.permission === 'sprint.sprint.read' && pp.includes('sprints:view')) ||
+      (item.permission === 'roadmap.roadmap.read' && pp.includes('roadmaps:view')) ||
+      (item.permission === 'version.version.read' && pp.includes('versions:view')) ||
+      (item.permission === 'setting.project_setting.update' && pp.includes('settings:manage'))
+    );
+  };
   const items = [
     { to: '/projects', label: 'Projects', icon: <ProjectsIcon />, end: true },
     { to: '/inbox', label: 'Inbox', icon: <InboxIcon />, end: true },
-    ...PROJECT_NAV_ITEMS.filter((item) => projectPermissions.includes(item.permission)).map((item) => ({
+    ...PROJECT_NAV_ITEMS.filter((item) => can(item)).map((item) => ({
       to: item.global ? item.to : `${base}${item.to}`,
       label: item.label,
       icon: item.icon,
@@ -214,7 +239,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   }, [theme]);
 
   const globalNavItems = useMemo(() => buildGlobalNav(user), [user]);
-  const nav = projectId ? projectNav(projectId, projectPermissions) : globalNavItems;
+  const nav = projectId ? projectNav(projectId, projectPermissions, user?.permissions ?? []) : globalNavItems;
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Issue[]>([]);
@@ -402,8 +427,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                     ) : (
                       <ul className="divide-y divide-[color:var(--border-subtle)]/70">
                         {notifications.slice(0, 20).map((n) => {
-                          const isUnread = !n.readAt;
-                          const href = toAppPath(n.url || '');
+                          const isUnread = n.isRead === false || (!n.isRead && !n.readAt);
+                          const href = toAppPath(n.link || n.url || '');
                           return (
                             <li key={n._id} className={`px-4 py-3 hover:bg-[color:var(--bg-surface)] transition ${isUnread ? 'bg-[color:var(--bg-surface)]/40' : ''}`}>
                               <Link

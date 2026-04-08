@@ -1,15 +1,18 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
-import { User } from './user.model';
+import { User, IUser, UserType, AuthProvider } from './user.model';
+import { DEFAULT_USER_PERMISSIONS, ALL_CUSTOMER_PERMISSIONS } from '../../shared/constants/permissions';
+import { mapLegacyCustomerPermissions } from '../../shared/constants/legacyPermissionMap';
 import { Role } from '../roles/role.model';
-import { Designation } from '../designations/designation.model';
 import { ApiError } from '../../utils/ApiError';
 import { env } from '../../config/env';
 import { sendForgotPasswordEmail } from '../../services/email.service';
 import type { RegisterInput, LoginInput, MicrosoftSsoInput } from './auth.validation';
-import type { IUser } from './user.model';
 import { resolveEffectiveGlobalPermissions } from './effectivePermissions';
+import { mergeTaskflowPermissionFloor } from './permissionMerge';
+import { CustomerUser } from '../customer-portal/customer-user/customerUser.model';
+import { CustomerOrg } from '../customer-portal/customer-org/customerOrg.model';
 
 const SALT_ROUNDS = 10;
 
@@ -48,24 +51,18 @@ export interface AuthUser {
   role: string;
   roleId?: string;
   roleName?: string;
-  designationName?: string;
   permissions: string[];
   mustChangePassword: boolean;
   createdAt?: string;
 }
 
-function signTokens(userId: string): AuthTokens {
+function signTokens(sub: string, userType: 'taskflow' | 'customer', extra?: { orgId?: string }): AuthTokens {
   const options = { expiresIn: env.jwtExpiresIn };
-  const accessToken = jwt.sign(
-    { sub: userId },
-    env.jwtSecret,
-    options as jwt.SignOptions
-  );
-  const refreshToken = jwt.sign(
-    { sub: userId, type: 'refresh' },
-    env.jwtSecret,
-    { expiresIn: '30d' } as jwt.SignOptions
-  );
+  const payload: Record<string, unknown> = { sub, userType, ...(extra ?? {}) };
+  const refreshPayload: Record<string, unknown> = { sub, userType, type: 'refresh', ...(extra ?? {}) };
+
+  const accessToken = jwt.sign(payload, env.jwtSecret, options as jwt.SignOptions);
+  const refreshToken = jwt.sign(refreshPayload, env.jwtSecret, { expiresIn: '30d' } as jwt.SignOptions);
   return {
     accessToken,
     refreshToken,
@@ -73,7 +70,7 @@ function signTokens(userId: string): AuthTokens {
   };
 }
 
-async function toAuthUser(user: IUser & { roleId?: unknown; designation?: unknown; mustChangePassword?: boolean }): Promise<AuthUser> {
+async function toAuthUser(user: IUser & { roleId?: unknown; mustChangePassword?: boolean }): Promise<AuthUser> {
   let rolePermissions: string[] = [];
   let roleName: string | undefined;
   if (user.roleId) {
@@ -82,17 +79,21 @@ async function toAuthUser(user: IUser & { roleId?: unknown; designation?: unknow
     if (role?.name) roleName = role.name;
   }
   if (!roleName) roleName = user.role === 'admin' ? 'Administrator' : 'Member';
-  let designationName: string | undefined;
-  if (user.designation) {
-    const des = await Designation.findById(user.designation).select('name').lean();
-    if (des?.name) designationName = des.name;
-  }
+
   const mustChange = user.mustChangePassword ?? false;
-  const permissions = resolveEffectiveGlobalPermissions({
-    rolePermissions,
-    role: user.role,
-    mustChangePassword: mustChange,
-  });
+  const overrides = (user as IUser & { permissionOverrides?: { granted?: string[]; revoked?: string[] } }).permissionOverrides;
+  const stored = (user as IUser).permissions;
+  const permissions =
+    Array.isArray(stored) && stored.length > 0
+      ? mergeTaskflowPermissionFloor(stored)
+      : mergeTaskflowPermissionFloor(
+          resolveEffectiveGlobalPermissions({
+            rolePermissions,
+            role: user.role,
+            mustChangePassword: mustChange,
+            permissionOverrides: overrides,
+          })
+        );
   const u = user as IUser & { avatarUrl?: string; createdAt?: Date };
   return {
     id: user._id.toString(),
@@ -102,7 +103,6 @@ async function toAuthUser(user: IUser & { roleId?: unknown; designation?: unknow
     role: user.role,
     roleId: user.roleId ? String(user.roleId) : undefined,
     roleName,
-    designationName,
     permissions,
     mustChangePassword: mustChange,
     createdAt: u.createdAt ? u.createdAt.toISOString() : undefined,
@@ -121,39 +121,134 @@ export async function register(input: RegisterInput): Promise<{ user: AuthUser; 
     password: hashedPassword,
     name: input.name,
     role: input.role ?? 'user',
+    permissions: mergeTaskflowPermissionFloor([]),
   });
 
-  const tokens = signTokens(user._id.toString());
+  const tokens = signTokens(user._id.toString(), 'taskflow');
   const authUser = await toAuthUser(user);
   return { user: authUser, tokens };
 }
 
-export async function login(input: LoginInput): Promise<{ user: AuthUser; tokens: AuthTokens }> {
-  const user = await User.findOne({ email: input.email }).select('+password').lean();
-  if (!user) {
-    throw new ApiError(401, 'Invalid email or password');
-  }
-  const u = user as { enabled?: boolean };
-  if (u.enabled === false) {
-    throw new ApiError(401, 'Account is disabled');
+export async function login(input: LoginInput): Promise<{ user: AuthUser | Record<string, unknown>; tokens: AuthTokens }> {
+  // First, try TF User collection
+  const tfUser = await User.findOne({ email: input.email }).select('+password').lean();
+  if (tfUser) {
+    const u = tfUser as { enabled?: boolean };
+    if (u.enabled === false) {
+      throw new ApiError(401, 'Account is disabled');
+    }
+    if (!tfUser.password) {
+      throw new ApiError(401, 'Use single sign-on or set a password from your profile');
+    }
+    const match = await bcrypt.compare(input.password, tfUser.password);
+    if (!match) {
+      throw new ApiError(401, 'Invalid email or password');
+    }
+    const tokens = signTokens(tfUser._id.toString(), 'taskflow');
+    const authUser = await toAuthUser(tfUser as unknown as IUser & { roleId?: unknown; mustChangePassword?: boolean });
+    return { user: { ...authUser, userType: 'taskflow' }, tokens };
   }
 
-  const match = await bcrypt.compare(input.password, user.password);
-  if (!match) {
-    throw new ApiError(401, 'Invalid email or password');
+  // Second, try CustomerUser collection
+  const customerUser = await CustomerUser.findOne({ email: input.email.toLowerCase().trim() })
+    .select('+password')
+    .populate('roleId', 'permissions name')
+    .lean();
+
+  if (customerUser) {
+    if (customerUser.status !== 'active') {
+      throw new ApiError(401, 'Account is not active');
+    }
+    const match = await bcrypt.compare(input.password, customerUser.password);
+    if (!match) {
+      throw new ApiError(401, 'Invalid email or password');
+    }
+
+    // Get org info for slug
+    const org = await CustomerOrg.findById(customerUser.customerOrgId).select('slug name').lean();
+
+    const tokens = signTokens(customerUser._id.toString(), 'customer', {
+      orgId: customerUser.customerOrgId.toString(),
+    });
+
+    const role = customerUser.roleId as { _id?: unknown; permissions?: string[]; name?: string } | null;
+    const customerPermissions: string[] = customerUser.isOrgAdmin
+      ? [...ALL_CUSTOMER_PERMISSIONS]
+      : mapLegacyCustomerPermissions(role?.permissions ?? []);
+
+    return {
+      user: {
+        id: customerUser._id.toString(),
+        email: customerUser.email,
+        name: customerUser.name,
+        avatarUrl: customerUser.avatarUrl,
+        userType: 'customer',
+        orgId: customerUser.customerOrgId.toString(),
+        orgSlug: org?.slug ?? '',
+        isOrgAdmin: customerUser.isOrgAdmin,
+        customerPermissions,
+        mustChangePassword: customerUser.mustChangePassword,
+      },
+      tokens,
+    };
   }
 
-  const tokens = signTokens(user._id.toString());
-  const authUser = await toAuthUser(user as unknown as IUser & { roleId?: unknown; mustChangePassword?: boolean });
-  return { user: authUser, tokens };
+  throw new ApiError(401, 'Invalid email or password');
 }
 
-export async function refresh(refreshToken: string): Promise<{ user: AuthUser; tokens: AuthTokens }> {
-  const decoded = jwt.verify(refreshToken, env.jwtSecret) as { sub?: string; type?: string };
+export async function refresh(refreshToken: string): Promise<{ user: AuthUser | Record<string, unknown>; tokens: AuthTokens }> {
+  const decoded = jwt.verify(refreshToken, env.jwtSecret) as {
+    sub?: string;
+    type?: string;
+    userType?: string;
+    orgId?: string;
+  };
+
   if (decoded.type !== 'refresh' || !decoded.sub) {
     throw new ApiError(401, 'Invalid refresh token');
   }
 
+  if (decoded.userType === 'customer') {
+    const customerUser = await CustomerUser.findById(decoded.sub)
+      .populate('roleId', 'permissions name')
+      .lean();
+
+    if (!customerUser) {
+      throw new ApiError(401, 'User not found');
+    }
+    if (customerUser.status !== 'active') {
+      throw new ApiError(401, 'Account is not active');
+    }
+
+    const org = await CustomerOrg.findById(customerUser.customerOrgId).select('slug name').lean();
+
+    const tokens = signTokens(customerUser._id.toString(), 'customer', {
+      orgId: customerUser.customerOrgId.toString(),
+    });
+
+    const role = customerUser.roleId as { _id?: unknown; permissions?: string[]; name?: string } | null;
+    const customerPermissions: string[] = customerUser.isOrgAdmin
+      ? [...ALL_CUSTOMER_PERMISSIONS]
+      : mapLegacyCustomerPermissions(role?.permissions ?? []);
+
+    return {
+      user: {
+        id: customerUser._id.toString(),
+        email: customerUser.email,
+        name: customerUser.name,
+        avatarUrl: customerUser.avatarUrl,
+        userType: 'customer',
+        orgId: customerUser.customerOrgId.toString(),
+        orgSlug: org?.slug ?? '',
+        isOrgAdmin: customerUser.isOrgAdmin,
+        customerPermissions,
+        mustChangePassword: customerUser.mustChangePassword,
+      },
+      tokens,
+    };
+  }
+
+  // Default: TF user
   const user = await User.findById(decoded.sub).lean();
   if (!user) {
     throw new ApiError(401, 'User not found');
@@ -163,7 +258,7 @@ export async function refresh(refreshToken: string): Promise<{ user: AuthUser; t
     throw new ApiError(401, 'Account is disabled');
   }
 
-  const tokens = signTokens(user._id.toString());
+  const tokens = signTokens(user._id.toString(), 'taskflow');
   const authUser = await toAuthUser(user as unknown as IUser & { roleId?: unknown; mustChangePassword?: boolean });
   return { user: authUser, tokens };
 }
@@ -178,6 +273,45 @@ export async function me(userId: string): Promise<AuthUser> {
   return toAuthUser(user as unknown as IUser & { roleId?: unknown; designation?: unknown; mustChangePassword?: boolean });
 }
 
+export async function customerMe(customerUserId: string): Promise<Record<string, unknown>> {
+  const customerUser = await CustomerUser.findById(customerUserId)
+    .populate('roleId', 'permissions name')
+    .lean();
+
+  if (!customerUser) throw new ApiError(401, 'User not found');
+  if (customerUser.status !== 'active') throw new ApiError(401, 'Account is not active');
+
+  const org = await CustomerOrg.findById(customerUser.customerOrgId).select('slug name').lean();
+  const role = customerUser.roleId as { _id?: unknown; permissions?: string[]; name?: string } | null;
+  const customerPermissions: string[] = role?.permissions ?? [];
+
+  return {
+    id: customerUser._id.toString(),
+    email: customerUser.email,
+    name: customerUser.name,
+    avatarUrl: customerUser.avatarUrl,
+    userType: 'customer',
+    orgId: customerUser.customerOrgId.toString(),
+    orgSlug: org?.slug ?? '',
+    orgName: org?.name ?? '',
+    isOrgAdmin: customerUser.isOrgAdmin,
+    customerPermissions,
+    mustChangePassword: customerUser.mustChangePassword,
+    createdAt: customerUser.createdAt?.toISOString(),
+  };
+}
+
+export async function setPassword(userId: string, newPassword: string): Promise<AuthUser> {
+  const hashed = await bcrypt.hash(newPassword, SALT_ROUNDS);
+  await User.findByIdAndUpdate(userId, {
+    $set: { password: hashed, mustChangePassword: false },
+    $unset: { passwordResetToken: 1, passwordResetExpires: 1 },
+  });
+  const updated = await User.findById(userId).lean();
+  if (!updated) throw new ApiError(500, 'User not found after update');
+  return toAuthUser(updated as unknown as IUser & { roleId?: unknown; mustChangePassword?: boolean });
+}
+
 export async function changePassword(
   userId: string,
   currentPassword: string,
@@ -185,6 +319,7 @@ export async function changePassword(
 ): Promise<AuthUser> {
   const user = await User.findById(userId).select('+password').lean();
   if (!user) throw new ApiError(401, 'User not found');
+  if (!user.password) throw new ApiError(400, 'Set a password first or use single sign-on');
   const match = await bcrypt.compare(currentPassword, user.password);
   if (!match) throw new ApiError(401, 'Current password is incorrect');
   const hashed = await bcrypt.hash(newPassword, SALT_ROUNDS);
@@ -350,7 +485,7 @@ export async function microsoftSso(input: MicrosoftSsoInput): Promise<{ user: Au
   }
 
   if (!user) throw new ApiError(500, 'User not found after SSO');
-  const tokens = signTokens(String(user._id));
+  const tokens = signTokens(String(user._id), 'taskflow');
   const authUser = await toAuthUser(user as any);
   return { user: authUser, tokens };
 }
@@ -371,4 +506,60 @@ export async function microsoftSsoAuthorizeUrl(input: { redirectUri?: string } =
   url.searchParams.set('state', state);
 
   return { url: url.toString(), state };
+}
+
+export async function findOrCreateOAuthUser(dto: {
+  provider: 'google' | 'microsoft';
+  providerId: string;
+  email: string;
+  name: string;
+  avatarUrl?: string | null;
+}): Promise<IUser> {
+  const emailNorm = dto.email.toLowerCase().trim();
+  const field = dto.provider === 'google' ? 'googleId' : 'microsoftId';
+  const provEnum = dto.provider === 'google' ? AuthProvider.GOOGLE : AuthProvider.MICROSOFT;
+
+  let user = await User.findOne({ [field]: dto.providerId }).exec();
+  if (user) {
+    const updates: Record<string, unknown> = {};
+    if (dto.avatarUrl != null && user.avatarUrl !== dto.avatarUrl) updates.avatarUrl = dto.avatarUrl;
+    if (user.providerEmail !== emailNorm) updates.providerEmail = emailNorm;
+    if (Object.keys(updates).length > 0) {
+      await User.findByIdAndUpdate(user._id, { $set: updates });
+      user = (await User.findById(user._id).exec())!;
+    }
+    return user;
+  }
+
+  const byEmail = await User.findOne({ email: emailNorm }).exec();
+  if (byEmail) {
+    if (byEmail.provider === AuthProvider.LOCAL) {
+      await User.findByIdAndUpdate(byEmail._id, {
+        $set: { [field]: dto.providerId, provider: provEnum, providerEmail: emailNorm },
+      });
+      return (await User.findById(byEmail._id).exec())!;
+    }
+    if (byEmail.provider !== provEnum) {
+      throw new ApiError(409, 'Email already linked to a different provider');
+    }
+    await User.findByIdAndUpdate(byEmail._id, {
+      $set: { [field]: dto.providerId, providerEmail: emailNorm },
+    });
+    return (await User.findById(byEmail._id).exec())!;
+  }
+
+  const created = await User.create({
+    email: emailNorm,
+    name: dto.name?.trim() || emailNorm.split('@')[0],
+    password: null,
+    provider: provEnum,
+    [field]: dto.providerId,
+    providerEmail: emailNorm,
+    avatarUrl: dto.avatarUrl ?? null,
+    role: 'user',
+    userType: UserType.TASKFLOW,
+    permissions: [...DEFAULT_USER_PERMISSIONS],
+    mustChangePassword: false,
+  });
+  return created;
 }

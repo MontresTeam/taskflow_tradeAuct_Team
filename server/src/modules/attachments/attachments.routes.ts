@@ -12,8 +12,8 @@ const router = Router({ mergeParams: true });
 
 router.use(authMiddleware);
 
-router.get('/:issueId/attachments', ...issueIdParamHandler, asyncHandler(getAttachments));
-router.post('/:issueId/attachments', createAttachmentHandler);
-router.delete('/:issueId/attachments/:id', deleteAttachmentHandler);
+router.get('/', ...issueIdParamHandler, asyncHandler(getAttachments));
+router.post('/', createAttachmentHandler);
+router.delete('/:id', deleteAttachmentHandler);
 
 export const attachmentsRoutes = router;

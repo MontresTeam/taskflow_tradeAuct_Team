@@ -15,10 +15,10 @@ const router = Router({ mergeParams: true });
 
 router.use(authMiddleware);
 
-router.get('/:issueId/comments', ...issueIdOnlyParamHandler, asyncHandler(getComments));
-router.post('/:issueId/comments', createCommentHandler);
-router.get('/:issueId/comments/:id', ...commentIdParamHandler, asyncHandler(getCommentById));
-router.patch('/:issueId/comments/:id', updateCommentHandler);
-router.delete('/:issueId/comments/:id', ...commentIdParamHandler, asyncHandler(deleteComment));
+router.get('/', ...issueIdOnlyParamHandler, asyncHandler(getComments));
+router.post('/', createCommentHandler);
+router.get('/:id', ...commentIdParamHandler, asyncHandler(getCommentById));
+router.patch('/:id', updateCommentHandler);
+router.delete('/:id', ...commentIdParamHandler, asyncHandler(deleteComment));
 
 export const commentsRoutes = router;

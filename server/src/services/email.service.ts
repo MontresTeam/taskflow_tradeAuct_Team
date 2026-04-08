@@ -171,3 +171,206 @@ export async function sendWatcherNotificationEmail(to: string, params: WatcherNo
     html: renderWatcherNotificationEmail(params),
   });
 }
+
+// ── Customer Portal Email Templates ──────────────────────────────────────────
+
+export function renderCustomerOrgAdminInviteEmail(
+  name: string,
+  email: string,
+  password: string,
+  orgName: string,
+  appUrl: string
+): string {
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Welcome to ${escapeHtml(orgName)} Customer Portal</title></head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+  <h2 style="color: #4f46e5;">Welcome to ${escapeHtml(orgName)} on TaskFlow</h2>
+  <p>Hi ${escapeHtml(name)},</p>
+  <p>Your customer portal account has been created as the Organization Admin for <strong>${escapeHtml(orgName)}</strong>. Use the credentials below to sign in:</p>
+  <p><strong>Email:</strong> ${escapeHtml(email)}<br><strong>Temporary Password:</strong> <code style="background: #f1f5f9; padding: 2px 6px; border-radius: 4px;">${escapeHtml(password)}</code></p>
+  <p>Please change your password after your first login.</p>
+  <p><a href="${escapeHtml(appUrl)}/portal/login" style="color: #4f46e5;">Sign in to Customer Portal</a></p>
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
+  <p style="font-size: 12px; color: #64748b;">This is an automated message. Do not reply.</p>
+</body>
+</html>
+  `.trim();
+}
+
+export function renderCustomerMemberInviteEmail(
+  name: string,
+  email: string,
+  password: string,
+  orgName: string,
+  appUrl: string
+): string {
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>You've been invited to ${escapeHtml(orgName)}</title></head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+  <h2 style="color: #4f46e5;">You've been invited to ${escapeHtml(orgName)}</h2>
+  <p>Hi ${escapeHtml(name)},</p>
+  <p>You've been invited to join the <strong>${escapeHtml(orgName)}</strong> customer portal. Use the credentials below to sign in:</p>
+  <p><strong>Email:</strong> ${escapeHtml(email)}<br><strong>Temporary Password:</strong> <code style="background: #f1f5f9; padding: 2px 6px; border-radius: 4px;">${escapeHtml(password)}</code></p>
+  <p>Please change your password after your first login.</p>
+  <p><a href="${escapeHtml(appUrl)}/portal/login" style="color: #4f46e5;">Sign in to Customer Portal</a></p>
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
+  <p style="font-size: 12px; color: #64748b;">This is an automated message. Do not reply.</p>
+</body>
+</html>
+  `.trim();
+}
+
+export function renderCustomerRequestSubmittedEmail(
+  requesterName: string,
+  requestTitle: string,
+  orgName: string,
+  appUrl: string
+): string {
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Request Submitted</title></head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+  <h2 style="color: #4f46e5;">Request Submitted</h2>
+  <p>Hi ${escapeHtml(requesterName)},</p>
+  <p>Your request <strong>${escapeHtml(requestTitle)}</strong> has been submitted to <strong>${escapeHtml(orgName)}</strong> and is pending approval.</p>
+  <p><a href="${escapeHtml(appUrl)}/portal/requests" style="color: #4f46e5;">View your requests</a></p>
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
+  <p style="font-size: 12px; color: #64748b;">This is an automated message. Do not reply.</p>
+</body>
+</html>
+  `.trim();
+}
+
+export function renderCustomerRequestApprovedByOrgAdminEmail(
+  requesterName: string,
+  requestTitle: string,
+  orgName: string,
+  appUrl: string
+): string {
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Request Approved</title></head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+  <h2 style="color: #4f46e5;">Request Approved by Org Admin</h2>
+  <p>Hi ${escapeHtml(requesterName)},</p>
+  <p>Your request <strong>${escapeHtml(requestTitle)}</strong> from <strong>${escapeHtml(orgName)}</strong> has been approved by your organization admin and is now pending TaskFlow review.</p>
+  <p><a href="${escapeHtml(appUrl)}/portal/requests" style="color: #4f46e5;">View your requests</a></p>
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
+  <p style="font-size: 12px; color: #64748b;">This is an automated message. Do not reply.</p>
+</body>
+</html>
+  `.trim();
+}
+
+export function renderCustomerRequestRejectedEmail(
+  requesterName: string,
+  requestTitle: string,
+  reason: string,
+  orgName: string,
+  appUrl: string
+): string {
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Request Rejected</title></head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+  <h2 style="color: #ef4444;">Request Rejected</h2>
+  <p>Hi ${escapeHtml(requesterName)},</p>
+  <p>Your request <strong>${escapeHtml(requestTitle)}</strong> from <strong>${escapeHtml(orgName)}</strong> has been rejected.</p>
+  ${reason ? `<p><strong>Reason:</strong> ${escapeHtml(reason)}</p>` : ''}
+  <p><a href="${escapeHtml(appUrl)}/portal/requests" style="color: #4f46e5;">View your requests</a></p>
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
+  <p style="font-size: 12px; color: #64748b;">This is an automated message. Do not reply.</p>
+</body>
+</html>
+  `.trim();
+}
+
+export function renderTicketCreatedEmail(
+  requesterName: string,
+  requestTitle: string,
+  issueKey: string,
+  orgName: string,
+  appUrl: string
+): string {
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Ticket Created</title></head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+  <h2 style="color: #22c55e;">Ticket Created: ${escapeHtml(issueKey)}</h2>
+  <p>Hi ${escapeHtml(requesterName)},</p>
+  <p>Your request <strong>${escapeHtml(requestTitle)}</strong> from <strong>${escapeHtml(orgName)}</strong> has been approved and a ticket has been created: <strong>${escapeHtml(issueKey)}</strong>.</p>
+  <p>Our team will begin working on it shortly.</p>
+  <p><a href="${escapeHtml(appUrl)}/portal/requests" style="color: #4f46e5;">View your requests</a></p>
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
+  <p style="font-size: 12px; color: #64748b;">This is an automated message. Do not reply.</p>
+</body>
+</html>
+  `.trim();
+}
+
+export function renderTfRejectedEmail(
+  requesterName: string,
+  requestTitle: string,
+  reason: string,
+  orgName: string,
+  appUrl: string
+): string {
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Request Declined</title></head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+  <h2 style="color: #ef4444;">Request Declined by TaskFlow</h2>
+  <p>Hi ${escapeHtml(requesterName)},</p>
+  <p>Your request <strong>${escapeHtml(requestTitle)}</strong> from <strong>${escapeHtml(orgName)}</strong> has been declined by the TaskFlow team.</p>
+  ${reason ? `<p><strong>Reason:</strong> ${escapeHtml(reason)}</p>` : ''}
+  <p><a href="${escapeHtml(appUrl)}/portal/requests" style="color: #4f46e5;">View your requests</a></p>
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
+  <p style="font-size: 12px; color: #64748b;">This is an automated message. Do not reply.</p>
+</body>
+</html>
+  `.trim();
+}
+
+export function renderTicketClosedEmail(
+  requesterName: string,
+  requestTitle: string,
+  issueKey: string,
+  orgName: string,
+  appUrl: string
+): string {
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Ticket Closed</title></head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+  <h2 style="color: #4f46e5;">Ticket Closed: ${escapeHtml(issueKey)}</h2>
+  <p>Hi ${escapeHtml(requesterName)},</p>
+  <p>Your ticket <strong>${escapeHtml(issueKey)}</strong> for request <strong>${escapeHtml(requestTitle)}</strong> from <strong>${escapeHtml(orgName)}</strong> has been resolved and closed.</p>
+  <p>Thank you for your patience!</p>
+  <p><a href="${escapeHtml(appUrl)}/portal/requests" style="color: #4f46e5;">View your requests</a></p>
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
+  <p style="font-size: 12px; color: #64748b;">This is an automated message. Do not reply.</p>
+</body>
+</html>
+  `.trim();
+}
+
+export async function sendCustomerEmail(to: string, subject: string, html: string): Promise<void> {
+  const transport = getTransporter();
+  if (!transport) return;
+  await transport.sendMail({
+    from: env.mailFrom,
+    to,
+    subject,
+    html,
+  });
+}

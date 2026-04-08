@@ -5,6 +5,8 @@ import { api } from '../lib/api';
 import { formatDateDDMMYYYY, toIsoDateString, todayIsoDate } from '../lib/dateFormat';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { getChartColor } from '../lib/chartTheme';
+import { userHasPermission } from '../utils/permissions';
+import { TASK_FLOW_PERMISSIONS } from '@shared/constants/permissions';
 
 interface UsageStats {
   dailyActiveUsers: Array<{ date: string; count: number }>;
@@ -41,7 +43,10 @@ export default function Analytics() {
       });
   }, [token, from, to]);
 
-  if (user?.role !== 'admin' && !user?.permissions?.includes('analytics:view')) {
+  if (
+    user?.role !== 'admin' &&
+    !userHasPermission(user?.permissions ?? [], TASK_FLOW_PERMISSIONS.TASKFLOW.ANALYTICS.VIEW)
+  ) {
     return (
       <div className="p-8">
         <p className="text-[color:var(--text-muted)]">Access denied.</p>

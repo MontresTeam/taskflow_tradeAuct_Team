@@ -9,6 +9,8 @@ import {
   type DragEndEvent,
 } from '@dnd-kit/core';
 import { useAuth } from '../contexts/AuthContext';
+import { userHasPermission } from '../utils/permissions';
+import { TASK_FLOW_PERMISSIONS } from '@shared/constants/permissions';
 import { useNotifications } from '../contexts/NotificationsContext';
 import {
   issuesApi,
@@ -382,7 +384,7 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
   useEffect(() => {
     if (!token) return;
     const perms = user?.permissions ?? [];
-    if (perms.includes('users:list')) {
+    if (userHasPermission(perms, TASK_FLOW_PERMISSIONS.AUTH.USER.LIST)) {
       usersApi.list(1, 100, token).then((res) => {
         if (res.success && res.data) setUsers(res.data.data);
       });

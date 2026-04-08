@@ -14,10 +14,10 @@ const router = Router({ mergeParams: true });
 
 router.use(authMiddleware);
 
-router.get('/:issueId/work-logs', ...issueIdParamHandler, asyncHandler(getWorkLogs));
-router.post('/:issueId/work-logs', ...issueIdParamHandler, ...createWorkLogHandler);
-router.patch('/:issueId/work-logs/:id', ...workLogIdParamHandler, ...updateWorkLogHandler);
-router.delete('/:issueId/work-logs/:id', ...workLogIdParamHandler, asyncHandler(deleteWorkLog));
+router.get('/', ...issueIdParamHandler, asyncHandler(getWorkLogs));
+router.post('/', ...issueIdParamHandler, ...createWorkLogHandler);
+router.patch('/:id', ...workLogIdParamHandler, ...updateWorkLogHandler);
+router.delete('/:id', ...workLogIdParamHandler, asyncHandler(deleteWorkLog));
 
 export const workLogsRoutes = router;
 

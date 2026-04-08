@@ -10,13 +10,14 @@ import {
   getRoleByIdParamHandler,
   getPermissionsHandler,
 } from './roles.controller';
+import { TASK_FLOW_PERMISSIONS } from '../../shared/constants/permissions';
 
 const router = Router();
 
 router.get('/permissions', getPermissionsHandler);
 
 router.use(authMiddleware);
-router.use(requirePermission('roles:manage'));
+router.use(requirePermission(TASK_FLOW_PERMISSIONS.AUTH.ROLE.MANAGE_ALL));
 
 router.get('/', getRolesHandler);
 router.post('/', createRoleHandler);

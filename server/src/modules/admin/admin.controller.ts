@@ -3,6 +3,8 @@ import type { AuthPayload } from '../../types/express';
 import { ApiError } from '../../utils/ApiError';
 import { User } from '../auth/user.model';
 import { env } from '../../config/env';
+import { userHasPermission } from '../../shared/constants/legacyPermissionMap';
+import { TASK_FLOW_PERMISSIONS } from '../../shared/constants/permissions';
 
 export interface LicenseData {
   userCount: number;
@@ -12,7 +14,10 @@ export interface LicenseData {
 
 export async function getLicense(req: Request & { user?: AuthPayload }, res: Response): Promise<void> {
   if (!req.user) throw new ApiError(401, 'Unauthorized');
-  if (req.user.role !== 'admin' && !req.user.permissions?.includes('license:view')) {
+  if (
+    req.user.role !== 'admin' &&
+    !userHasPermission(req.user.permissions ?? [], TASK_FLOW_PERMISSIONS.TASKFLOW.LICENSE.VIEW)
+  ) {
     throw new ApiError(403, 'Access denied');
   }
 

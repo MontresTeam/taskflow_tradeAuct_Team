@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { rolesApi, permissionsApi, type Role, type PermissionItem } from '../lib/api';
 import ConfirmModal from '../components/ConfirmModal';
@@ -246,13 +247,13 @@ export default function Roles() {
         )}
       </div>
 
-      {modal && (
+      {modal && createPortal(
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
           onClick={() => setModal(null)}
         >
           <div
-            className="bg-[color:var(--bg-elevated)] border border-[color:var(--border-subtle)] rounded-2xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto"
+            className="bg-[color:var(--bg-elevated)] border border-[color:var(--border-subtle)] rounded-2xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto animate-scale-in"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="p-6 lg:p-8">
@@ -316,7 +317,8 @@ export default function Roles() {
               </form>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       <ConfirmModal

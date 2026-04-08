@@ -76,6 +76,8 @@ export interface IProject extends Document {
   key: string;
   description: string;
   lead: mongoose.Types.ObjectId;
+  archived: boolean;
+  orgId?: mongoose.Types.ObjectId;
   nextIssueNumber: number;
   statuses: IProjectStatus[];
   issueTypes: IProjectIssueType[];
@@ -172,6 +174,8 @@ const projectSchema = new Schema<IProject>(
     key: { type: String, required: true, unique: true, uppercase: true },
     description: { type: String, default: '' },
     lead: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    archived: { type: Boolean, default: false },
+    orgId: { type: Schema.Types.ObjectId, ref: 'CustomerOrg', default: null },
     nextIssueNumber: { type: Number, default: 1 },
     statuses: { type: [projectStatusSchema], default: undefined },
     issueTypes: { type: [projectIssueTypeSchema], default: undefined },

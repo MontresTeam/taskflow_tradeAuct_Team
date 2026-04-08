@@ -60,21 +60,6 @@ export function UsersIcon(props: IconProps) {
   );
 }
 
-export function DesignationsIcon(props: IconProps) {
-  return (
-    <BaseIcon {...props}>
-      <path d="M6 5h12" />
-      <path d="M6 10h12" />
-      <path d="M6 15h8" />
-      <path d="M6 19h5" />
-      <circle cx="4" cy="5" r="1" />
-      <circle cx="4" cy="10" r="1" />
-      <circle cx="4" cy="15" r="1" />
-      <circle cx="4" cy="19" r="1" />
-    </BaseIcon>
-  );
-}
-
 export function RolesIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>

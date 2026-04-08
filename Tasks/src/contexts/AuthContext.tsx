@@ -17,10 +17,11 @@ interface AuthContextValue {
   user: AuthUser | null;
   token: string | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
+  login: (email: string, password: string) => Promise<{ ok: boolean; error?: string; userType?: string }>;
   microsoftSso: (code: string, redirectUri?: string) => Promise<{ ok: boolean; error?: string }>;
   logout: () => void;
   updateUser: (user: AuthUser) => void;
+  setAccessToken: (accessToken: string) => void;
   refreshUser: () => Promise<{ ok: boolean; error?: string }>;
 }
 
@@ -57,6 +58,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(USER_KEY, JSON.stringify(next));
   }, []);
 
+  const setAccessToken = useCallback((accessToken: string) => {
+    setToken(accessToken);
+    localStorage.setItem(ACCESS_KEY, accessToken);
+  }, []);
+
   const refreshUser = useCallback(async () => {
     const accessToken = localStorage.getItem(ACCESS_KEY);
     if (!accessToken) return { ok: false, error: 'Not authenticated' };
@@ -84,7 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       localStorage.setItem(ACCESS_KEY, res.data.tokens.accessToken);
       localStorage.setItem(REFRESH_KEY, res.data.tokens.refreshToken);
       localStorage.setItem(USER_KEY, JSON.stringify(res.data.user));
-      return { ok: true };
+      return { ok: true, userType: res.data.user.userType };
     },
     []
   );
@@ -103,8 +109,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ user, token, loading, login, microsoftSso, logout, updateUser, refreshUser }),
-    [user, token, loading, login, microsoftSso, logout, updateUser, refreshUser]
+    () => ({
+      user,
+      token,
+      loading,
+      login,
+      microsoftSso,
+      logout,
+      updateUser,
+      setAccessToken,
+      refreshUser,
+    }),
+    [user, token, loading, login, microsoftSso, logout, updateUser, setAccessToken, refreshUser]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
