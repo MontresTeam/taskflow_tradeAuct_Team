@@ -18,9 +18,19 @@ import {
   cancelInvitationParamHandler,
   timesheetHandler,
   sprintReportHandler,
+  getProjectIssueGraph,
+  resolvedFieldsHandler,
+  estimateApprovalsHandler,
+  projectRulesDryRunHandler,
+  enableEstimateApprovalHandler,
   updateMemberDesignation,
   removeMember,
 } from './projects.controller';
+import {
+  getProjectTimeline,
+  snapshotProjectBaseline,
+} from '../timeline/timeline.controller';
+import { importsRoutes } from '../imports/imports.routes';
 import { asyncHandler } from '../../utils/asyncHandler';
 import { milestonesRoutes } from '../milestones/milestones.routes';
 import { roadmapsRoutes } from '../roadmaps/roadmaps.routes';
@@ -48,6 +58,10 @@ router.post(
   ...saveSettingsTemplateHandler
 );
 router.get('/:id', ...idParamHandler, asyncHandler(getProjectById));
+router.get('/:id/resolved-fields', ...idParamHandler, requireProjectPermission(PROJECT_PERMISSIONS.ISSUE.ISSUE.READ), ...resolvedFieldsHandler);
+router.get('/:id/estimate-approvals', ...idParamHandler, requireProjectPermission(PROJECT_PERMISSIONS.ISSUE.ESTIMATE.VIEW), ...estimateApprovalsHandler);
+router.post('/:id/rules/dry-run', ...idParamHandler, requireProjectPermission(PROJECT_PERMISSIONS.ISSUE.RULE.MANAGE), ...projectRulesDryRunHandler);
+router.post('/:id/enable-estimate-approval', ...idParamHandler, requireProjectPermission(PROJECT_PERMISSIONS.SETTING.PROJECT_SETTING.UPDATE), ...enableEstimateApprovalHandler);
 router.patch('/:id', ...idParamHandler, requireProjectPermission(PROJECT_PERMISSIONS.SETTING.PROJECT_SETTING.UPDATE), ...updateProjectHandler);
 router.post('/:id/versions/release', releaseVersionHandler);
 router.get('/:id/timesheet', ...idParamHandler, requireProjectPermission(PROJECT_PERMISSIONS.ISSUE.ISSUE.READ), ...timesheetHandler);
@@ -67,6 +81,10 @@ router.use('/:id/test-cases', idParamHandler[0], testCasesRoutes);
 router.use('/:id/test-plans', idParamHandler[0], testPlansRoutes);
 router.use('/:id/traceability', idParamHandler[0], traceabilityRoutes);
 router.get('/:id/sprints/:sprintId/report', requireProjectPermission(PROJECT_PERMISSIONS.SPRINT.SPRINT.READ), ...sprintReportHandler);
+router.get('/:id/link-graph', ...idParamHandler, requireProjectPermission(PROJECT_PERMISSIONS.ISSUE.ISSUE.READ), asyncHandler(getProjectIssueGraph));
+router.get('/:id/timeline', ...idParamHandler, requireProjectPermission(PROJECT_PERMISSIONS.ISSUE.ISSUE.READ), asyncHandler(getProjectTimeline));
+router.post('/:id/timeline/baseline', ...idParamHandler, requireProjectPermission(PROJECT_PERMISSIONS.ISSUE.ISSUE.UPDATE), asyncHandler(snapshotProjectBaseline));
+router.use('/:id/imports', idParamHandler[0], importsRoutes);
 router.delete('/:id', ...idParamHandler, requireProjectPermission(PROJECT_PERMISSIONS.SCOPE.DELETE), asyncHandler(deleteProject));
 
 export const projectsRoutes = router;

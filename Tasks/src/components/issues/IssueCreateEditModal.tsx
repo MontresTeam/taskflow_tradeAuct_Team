@@ -2,7 +2,8 @@ import { createPortal } from 'react-dom';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { DescriptionEditor } from '../issue';
 import DateInputDDMMYYYY from '../DateInputDDMMYYYY';
-import type { Issue, Project, User, Milestone, Sprint } from '../../lib/api';
+import { useAuth } from '../../contexts/AuthContext';
+import { projectsApi, type Issue, type Project, type User, type Milestone, type Sprint, type ResolvedCustomField } from '../../lib/api';
 import { formatDateDDMMYYYY } from '../../lib/dateFormat';
 
 export interface IssueForm {
@@ -18,7 +19,7 @@ export interface IssueForm {
   parent: string;
   milestone: string;
   customFieldValues: Record<string, unknown>;
-  fixVersion: string;
+  fixVersion: string[];
   affectsVersions: string[];
   labels: string[];
 }
@@ -36,6 +37,7 @@ interface IssueCreateEditModalProps {
   statusList: string[];
   users: User[];
   parentCandidates: Issue[];
+  editingIssueId?: string;
   project: Project | null;
   getIssueKey: (issue: Issue) => string;
   projects?: Project[];
@@ -48,14 +50,27 @@ interface IssueCreateEditModalProps {
 }
 
 export function IssueCreateEditModal(props: IssueCreateEditModalProps) {
-  const { modal, setModal, form, setForm, submitError, submitting, handleSubmit, typeList, priorityList, statusList, users, parentCandidates, project, getIssueKey, projects = [], showProjectSelector, milestones = [], sprints = [], labelSuggestions = [], pendingFiles = [], onPendingFilesChange } = props;
-  if (!modal) return null;
+  const { modal, setModal, form, setForm, submitError, submitting, handleSubmit, typeList, priorityList, statusList, users, parentCandidates, editingIssueId, project, getIssueKey, projects = [], showProjectSelector, milestones = [], sprints = [], labelSuggestions = [], pendingFiles = [], onPendingFilesChange } = props;
+  const { token } = useAuth();
+  const [resolvedFields, setResolvedFields] = useState<ResolvedCustomField[]>([]);
+
+  useEffect(() => {
+    if (!modal || !token || !project?._id || !form.type) {
+      setResolvedFields([]);
+      return;
+    }
+    projectsApi.getResolvedCustomFields(project._id, form.type, token).then((res) => {
+      if (res.success && res.data) setResolvedFields(Array.isArray(res.data) ? res.data : []);
+      else setResolvedFields([]);
+    });
+  }, [modal, token, project?._id, form.type]);
+
+  const [fixOpen, setFixOpen] = useState(false);
+  const fixRef = useRef<HTMLDivElement | null>(null);
   const [affectsOpen, setAffectsOpen] = useState(false);
   const affectsRef = useRef<HTMLDivElement | null>(null);
   const [labelInput, setLabelInput] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const ACCEPTED_FILE_TYPES = 'image/*,video/*,.pdf,.xlsx,.xls,.docx,.doc';
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (!onPendingFilesChange) return;
@@ -70,14 +85,13 @@ export function IssueCreateEditModal(props: IssueCreateEditModalProps) {
     onPendingFilesChange(pendingFiles.filter((_, i) => i !== index));
   }, [pendingFiles, onPendingFilesChange]);
 
-  const inputCls =
-    'w-full px-3 py-1.5 rounded-md bg-[color:var(--bg-page)] border border-[color:var(--border-subtle)] text-[color:var(--text-primary)] text-xs focus:outline-none focus:ring-1 focus:ring-[color:var(--accent)]/40 transition-colors';
-  const selectedAffects = (project?.versions || []).filter((v) => form.affectsVersions.includes(v.id));
-
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node | null;
       if (!target) return;
+      if (fixRef.current && !fixRef.current.contains(target)) {
+        setFixOpen(false);
+      }
       if (affectsRef.current && !affectsRef.current.contains(target)) {
         setAffectsOpen(false);
       }
@@ -89,6 +103,17 @@ export function IssueCreateEditModal(props: IssueCreateEditModalProps) {
   useEffect(() => {
     setLabelInput('');
   }, [modal, form.labels]);
+
+  const showParentField = form.type !== 'Epic';
+  const parentOptions = parentCandidates.filter((p) => p._id !== editingIssueId);
+  if (!modal) return null;
+
+  const inputCls =
+    'w-full px-3 py-1.5 rounded-md bg-[color:var(--bg-page)] border border-[color:var(--border-subtle)] text-[color:var(--text-primary)] text-xs focus:outline-none focus:ring-1 focus:ring-[color:var(--accent)]/40 transition-colors';
+  const selectedFix = (project?.versions || []).filter((v) => form.fixVersion.includes(v.id));
+  const selectedAffects = (project?.versions || []).filter((v) => form.affectsVersions.includes(v.id));
+
+  const ACCEPTED_FILE_TYPES = 'image/*,video/*,.pdf,.xlsx,.xls,.docx,.doc';
 
   const normalizedSuggestions = Array.from(
     new Set(
@@ -237,13 +262,20 @@ export function IssueCreateEditModal(props: IssueCreateEditModalProps) {
                 <p className="text-[11px] text-[color:var(--text-muted)]">Suggested from existing issues. You can also add new labels.</p>
               </div>
             </div>
-            {(typeList.includes('Epic') || typeList.includes('Story')) && (
+            {showParentField && (
               <div className="col-span-2">
-                <label className="block text-xs font-medium text-[color:var(--text-primary)] mb-1">Parent (Epic/Story)</label>
+                <label className="block text-xs font-medium text-[color:var(--text-primary)] mb-1">Parent issue</label>
                 <select value={form.parent} onChange={(e) => setForm((f) => ({ ...f, parent: e.target.value }))} className={inputCls}>
                   <option value="">None</option>
-                  {parentCandidates.map((p) => <option key={p._id} value={p._id}>{getIssueKey(p)} · {p.title}</option>)}
+                  {parentOptions.map((p) => (
+                    <option key={p._id} value={p._id}>
+                      {getIssueKey(p)} · {p.title} ({p.type})
+                    </option>
+                  ))}
                 </select>
+                {parentOptions.length === 0 && (
+                  <p className="mt-1 text-[11px] text-[color:var(--text-muted)]">No other issues in this project yet, or load the project list first.</p>
+                )}
               </div>
             )}
             {milestones.length > 0 && (
@@ -262,12 +294,52 @@ export function IssueCreateEditModal(props: IssueCreateEditModalProps) {
           </div>
           {project?.versions && project.versions.length > 0 && (
             <div className="grid grid-cols-1 gap-3 pt-2 min-w-0">
-              <div>
+              <div className="min-w-0">
                 <label className="block text-xs font-medium text-[color:var(--text-primary)] mb-1">Fix version</label>
-                <select value={form.fixVersion} onChange={(e) => setForm((f) => ({ ...f, fixVersion: e.target.value }))} className={inputCls}>
-                  <option value="">None</option>
-                  {project.versions.map((v) => <option key={v.id} value={v.id}>{v.name} {v.status !== 'unreleased' ? `(${v.status})` : ''}</option>)}
-                </select>
+                <div className="relative" ref={fixRef}>
+                  <button
+                    type="button"
+                    onClick={() => setFixOpen((v) => !v)}
+                    className={inputCls + ' min-h-[34px] text-left flex items-center justify-between hover:bg-[color:var(--bg-surface)]'}
+                  >
+                    <span className="truncate pr-3">
+                      {selectedFix.length === 0
+                        ? 'None'
+                        : selectedFix.length <= 2
+                          ? selectedFix.map((v) => v.name).join(', ')
+                          : `${selectedFix.length} selected`}
+                    </span>
+                    <span className="text-[10px] text-[color:var(--text-muted)]">{fixOpen ? '▲' : '▼'}</span>
+                  </button>
+                  {fixOpen && (
+                    <div className="absolute z-30 mt-1 w-full rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] shadow-xl p-1 max-h-56 overflow-auto">
+                      {project.versions.map((v) => {
+                        const checked = form.fixVersion.includes(v.id);
+                        return (
+                          <label
+                            key={v.id}
+                            className="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer hover:bg-[color:var(--bg-page)] transition-colors"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => {
+                                setForm((f) => {
+                                  const set = new Set(f.fixVersion);
+                                  if (e.target.checked) set.add(v.id);
+                                  else set.delete(v.id);
+                                  return { ...f, fixVersion: Array.from(set) };
+                                });
+                              }}
+                              className="accent-[color:var(--accent)]"
+                            />
+                            <span className="text-xs text-[color:var(--text-primary)]">{v.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="min-w-0">
                 <label className="block text-xs font-medium text-[color:var(--text-primary)] mb-1">Affects versions</label>
@@ -319,17 +391,33 @@ export function IssueCreateEditModal(props: IssueCreateEditModalProps) {
               </div>
             </div>
           )}
-          {project?.customFields?.length ? (
+          {resolvedFields.length > 0 ? (
             <div className="space-y-3 pt-2 border-t border-[color:var(--border-subtle)]">
               <p className="text-xs text-[color:var(--text-muted)]">Custom fields</p>
-              {project.customFields.map((field) => {
+              {resolvedFields.map((field) => {
                 const val = form.customFieldValues[field.key];
                 const value = val === undefined || val === null ? '' : String(val);
+                const required = field.effectiveRequired;
+                if (field.fieldType === 'formula') {
+                  const display =
+                    val !== undefined && val !== null && val !== ''
+                      ? String(val)
+                      : '—';
+                  return (
+                    <div key={field.id}>
+                      <label className="block text-xs font-medium text-[color:var(--text-primary)] mb-1">
+                        {field.label}
+                        <span className="text-[color:var(--text-muted)] font-normal ml-1">(calculated)</span>
+                      </label>
+                      <input type="text" value={display} readOnly disabled className={`${inputCls} opacity-70`} />
+                    </div>
+                  );
+                }
                 return (
                   <div key={field.id}>
-                    <label className="block text-xs font-medium text-[color:var(--text-primary)] mb-1">{field.label}{field.required ? ' *' : ''}</label>
-                    {field.fieldType === 'text' && <input type="text" value={value} onChange={(e) => setForm((f) => ({ ...f, customFieldValues: { ...f.customFieldValues, [field.key]: e.target.value || undefined } }))} required={field.required} className={inputCls} />}
-                    {field.fieldType === 'number' && <input type="number" value={value} onChange={(e) => setForm((f) => ({ ...f, customFieldValues: { ...f.customFieldValues, [field.key]: e.target.value === '' ? undefined : Number(e.target.value) } }))} required={field.required} className={inputCls} />}
+                    <label className="block text-xs font-medium text-[color:var(--text-primary)] mb-1">{field.label}{required ? ' *' : ''}</label>
+                    {field.fieldType === 'text' && <input type="text" value={value} onChange={(e) => setForm((f) => ({ ...f, customFieldValues: { ...f.customFieldValues, [field.key]: e.target.value || undefined } }))} required={required} className={inputCls} />}
+                    {field.fieldType === 'number' && <input type="number" value={value} onChange={(e) => setForm((f) => ({ ...f, customFieldValues: { ...f.customFieldValues, [field.key]: e.target.value === '' ? undefined : Number(e.target.value) } }))} required={required} className={inputCls} />}
                     {field.fieldType === 'date' && (
                       <DateInputDDMMYYYY
                         value={typeof value === 'string' ? value : ''}
@@ -339,12 +427,12 @@ export function IssueCreateEditModal(props: IssueCreateEditModalProps) {
                             customFieldValues: { ...f.customFieldValues, [field.key]: iso || undefined },
                           }))
                         }
-                        allowEmpty={!field.required}
+                        allowEmpty={!required}
                         className={inputCls}
                       />
                     )}
                     {field.fieldType === 'select' && (
-                      <select value={value} onChange={(e) => setForm((f) => ({ ...f, customFieldValues: { ...f.customFieldValues, [field.key]: e.target.value || undefined } }))} required={field.required} className={inputCls}>
+                      <select value={value} onChange={(e) => setForm((f) => ({ ...f, customFieldValues: { ...f.customFieldValues, [field.key]: e.target.value || undefined } }))} required={required} className={inputCls}>
                         <option value="">—</option>
                         {(field.options ?? []).map((opt) => <option key={opt} value={opt}>{opt}</option>)}
                       </select>
@@ -363,7 +451,7 @@ export function IssueCreateEditModal(props: IssueCreateEditModalProps) {
                       </select>
                     )}
                     {field.fieldType === 'user' && (
-                      <select value={value} onChange={(e) => setForm((f) => ({ ...f, customFieldValues: { ...f.customFieldValues, [field.key]: e.target.value || undefined } }))} required={field.required} className={inputCls}>
+                      <select value={value} onChange={(e) => setForm((f) => ({ ...f, customFieldValues: { ...f.customFieldValues, [field.key]: e.target.value || undefined } }))} required={required} className={inputCls}>
                         <option value="">—</option>
                         {users.map((u) => <option key={u._id} value={u._id}>{u.name}</option>)}
                       </select>

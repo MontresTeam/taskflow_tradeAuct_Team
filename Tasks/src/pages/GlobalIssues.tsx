@@ -8,6 +8,7 @@ import {
   type DragEndEvent,
 } from '@dnd-kit/core';
 import { useAuth } from '../contexts/AuthContext';
+import { useNotifications } from '../contexts/NotificationsContext';
 import {
   issuesApi,
   usersApi,
@@ -21,22 +22,31 @@ import {
   type Project,
   type Sprint,
   type Milestone,
+  type ProjectVersion,
   getIssueKey,
 } from '../lib/api';
 import ConfirmModal from '../components/ConfirmModal';
+import { normalizeFixVersionIds } from '../lib/issueVersions';
 import {
   parseFiltersFromSearchParams,
   buildSearchParams,
+  parseIssuesColumnsConfig,
   ISSUE_TABLE_COLUMNS,
-  DEFAULT_COLUMN_ORDER,
   DEFAULT_STATUSES,
   DEFAULT_TYPES,
   DEFAULT_PRIORITIES,
+  applyFiltersToListParams,
+  countActiveFilters,
+  hasAnyIssueFilters,
+  resolveIssueParentId,
+  filterParentCandidates,
   type QuickFilterValue,
   type ViewModeValue,
 } from '../components/issues';
 import {
   QuickFiltersBar,
+  QuickFilterLabelFilters,
+  ActiveFilterChips,
   IssuesToolbar,
   JqlSearchPanel,
   BulkEditBar,
@@ -48,6 +58,8 @@ import {
   ColumnsConfigModal,
   IssueCreateEditModal,
   BulkEditModal,
+  buildBulkUpdates,
+  type BulkFormState,
 } from '../components/issues';
 
 const GLOBAL_COLUMNS_VISIBLE: Record<string, boolean> = {
@@ -55,7 +67,7 @@ const GLOBAL_COLUMNS_VISIBLE: Record<string, boolean> = {
 };
 
 function getGlobalColumnsConfig() {
-  return { order: [...DEFAULT_COLUMN_ORDER], visible: { ...GLOBAL_COLUMNS_VISIBLE } };
+  return parseIssuesColumnsConfig(null, GLOBAL_COLUMNS_VISIBLE);
 }
 
 export default function GlobalIssues() {
@@ -82,11 +94,21 @@ export default function GlobalIssues() {
   };
 
   const { token, user } = useAuth();
+  const { showToast } = useNotifications();
   const [projects, setProjects] = useState<Project[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [total, setTotal] = useState(0);
+  const [totalCounts, setTotalCounts] = useState<{
+    my: number;
+    open: number;
+    all: number;
+    myOpenLabels: Array<{ label: string; count: number }>;
+    openLabels: Array<{ label: string; count: number }>;
+    allLabels: Array<{ label: string; count: number }>;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [users, setUsers] = useState<User[]>([]);
+  const [modalUsers, setModalUsers] = useState<User[]>([]);
   const [modal, setModal] = useState<'create' | 'edit' | null>(null);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [editIssue, setEditIssue] = useState<Issue | null>(null);
@@ -103,7 +125,7 @@ export default function GlobalIssues() {
     parent: '',
     milestone: '',
     customFieldValues: {} as Record<string, unknown>,
-    fixVersion: '',
+    fixVersion: [] as string[],
     affectsVersions: [] as string[],
     labels: [] as string[],
   });
@@ -111,7 +133,9 @@ export default function GlobalIssues() {
   const [submitting, setSubmitting] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [saveFilterName, setSaveFilterName] = useState('');
-  const [openFilterDropdown, setOpenFilterDropdown] = useState<'status' | 'type' | 'priority' | 'assignee' | 'reporter' | 'labels' | 'storyPoints' | 'project' | null>(null);
+  const [openFilterDropdown, setOpenFilterDropdown] = useState<
+    'status' | 'type' | 'priority' | 'assignee' | 'reporter' | 'labels' | 'storyPoints' | 'project' | 'sprint' | 'milestone' | 'fixVersion' | 'affectsVersions' | 'dueDate' | null
+  >(null);
   const [confirmDeleteIssue, setConfirmDeleteIssue] = useState<Issue | null>(null);
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [columnDragId, setColumnDragId] = useState<string | null>(null);
@@ -122,7 +146,10 @@ export default function GlobalIssues() {
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [selectedIssueIds, setSelectedIssueIds] = useState<Set<string>>(new Set());
   const [bulkModal, setBulkModal] = useState<'edit' | null>(null);
-  const [bulkForm, setBulkForm] = useState<{ status?: string; assignee?: string; sprint?: string; storyPoints?: string; type?: string; priority?: string }>({});
+  const [bulkForm, setBulkForm] = useState<BulkFormState>({});
+  const [bulkSprints, setBulkSprints] = useState<Sprint[]>([]);
+  const [bulkMilestones, setBulkMilestones] = useState<Milestone[]>([]);
+  const [bulkParentCandidates, setBulkParentCandidates] = useState<Issue[]>([]);
   const [bulkSubmitting, setBulkSubmitting] = useState(false);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [sprints, setSprints] = useState<Sprint[]>([]);
@@ -135,17 +162,11 @@ export default function GlobalIssues() {
   const [watchingLoadingId, setWatchingLoadingId] = useState<string | null>(null);
 
   const COLUMNS_CONFIG_KEY = 'taskflow-issues-columns-global';
-  const [columnsConfig, setColumnsConfig] = useState<{ order: string[]; visible: Record<string, boolean> }>(() => {
+  const [columnsConfig, setColumnsConfig] = useState(() => {
     try {
       const raw = localStorage.getItem(COLUMNS_CONFIG_KEY);
       if (raw) {
-        const parsed = JSON.parse(raw) as { order: string[]; visible: Record<string, boolean> };
-        const order = parsed.order?.length ? parsed.order : DEFAULT_COLUMN_ORDER;
-        const visible: Record<string, boolean> = { ...GLOBAL_COLUMNS_VISIBLE };
-        ISSUE_TABLE_COLUMNS.forEach((c) => {
-          if (parsed.visible && c.id in parsed.visible) visible[c.id] = Boolean(parsed.visible[c.id]);
-        });
-        return { order, visible };
+        return parseIssuesColumnsConfig(JSON.parse(raw) as Parameters<typeof parseIssuesColumnsConfig>[0], GLOBAL_COLUMNS_VISIBLE);
       }
     } catch {}
     return getGlobalColumnsConfig();
@@ -173,6 +194,13 @@ export default function GlobalIssues() {
   };
   const resetColumns = () => setColumnsConfig(getGlobalColumnsConfig());
 
+  const setColumnWidth = (colId: string, width: number) => {
+    setColumnsConfig((prev) => ({
+      ...prev,
+      widths: { ...prev.widths, [colId]: width },
+    }));
+  };
+
   const statusList = useMemo(() => {
     const fromProjects = [...new Set(projects.flatMap((p) => (p.statuses ?? []).map((s) => s.name)))];
     return fromProjects.length ? fromProjects : DEFAULT_STATUSES;
@@ -189,15 +217,16 @@ export default function GlobalIssues() {
   const getTypeMeta = (name: string) => projects.flatMap((p) => p.issueTypes ?? []).find((t) => t.name === name);
   const getStatusMeta = (name: string) => projects.flatMap((p) => p.statuses ?? []).find((s) => s.name === name);
 
-  const hasActiveFilters = Boolean(
-    filters.project.length || filters.status.length || filters.assignee.length || filters.reporter.length ||
-    filters.type.length || filters.priority.length || filters.labels.length ||
-    filters.storyPoints.length || filters.hasStoryPoints === false
-  );
-  const activeFilterCount =
-    filters.project.length + filters.status.length + filters.assignee.length + filters.reporter.length +
-    filters.type.length + filters.priority.length + filters.labels.length +
-    filters.storyPoints.length + (filters.hasStoryPoints === false ? 1 : 0);
+  const hasActiveFilters = hasAnyIssueFilters(filters);
+  const activeFilterCount = countActiveFilters(filters);
+  const versions = useMemo(() => {
+    const scope = filters.project.length
+      ? projects.filter((p) => filters.project.includes(p._id))
+      : projects;
+    const byId = new Map<string, ProjectVersion>();
+    scope.forEach((p) => (p.versions ?? []).forEach((v) => byId.set(v.id, v)));
+    return Array.from(byId.values());
+  }, [projects, filters.project]);
   const allLabels = useMemo(() => [...new Set(issues.flatMap((i) => i.labels || []))].sort(), [issues]);
   const limit = 25;
 
@@ -211,6 +240,13 @@ export default function GlobalIssues() {
 
   const useJql = Boolean(jql.trim());
 
+  const quickFilterLabelCounts = useMemo(() => {
+    if (!totalCounts) return [];
+    if (quickFilter === 'my') return totalCounts.myOpenLabels;
+    if (quickFilter === 'open') return totalCounts.openLabels;
+    return totalCounts.allLabels;
+  }, [totalCounts, quickFilter]);
+
   function buildListParams(p: { page: number }): Record<string, string | number> & { token: string } {
     if (useJql) {
       return { token: token!, page: p.page, limit: viewMode === 'kanban' ? 200 : 20, jql };
@@ -221,9 +257,12 @@ export default function GlobalIssues() {
       token: token!,
     };
     if (filters.project.length) params.project = filters.project.join(',');
-    if (quickFilter === 'open' || quickFilter === 'my') {
+    if ((quickFilter === 'open' || quickFilter === 'my') && !filters.status.length) {
       const closedStatusSet = new Set<string>();
-      projects.forEach((project) => {
+      const scope = filters.project.length
+        ? projects.filter((p) => filters.project.includes(p._id))
+        : projects;
+      scope.forEach((project) => {
         (project.statuses ?? []).forEach((status) => {
           if (isClosedStatus(status)) closedStatusSet.add(status.name);
         });
@@ -234,16 +273,7 @@ export default function GlobalIssues() {
       if (closedStatuses.length === 0) closedStatuses = [...LEGACY_CLOSED_STATUSES];
       params.statusExclude = closedStatuses.join(',');
     }
-    else {
-      if (filters.status.length) params.status = filters.status.join(',');
-      if (filters.assignee.length) params.assignee = filters.assignee.join(',');
-      if (filters.reporter.length) params.reporter = filters.reporter.join(',');
-      if (filters.type.length) params.type = filters.type.join(',');
-      if (filters.priority.length) params.priority = filters.priority.join(',');
-      if (filters.labels.length) params.labels = filters.labels.join(',');
-      if (filters.storyPoints.length) params.storyPoints = filters.storyPoints.join(',');
-      if (filters.hasStoryPoints === false) params.hasStoryPoints = 'false';
-    }
+    applyFiltersToListParams(params, filters);
     if (quickFilter === 'my' && user?.id) params.assignee = user.id;
     return params;
   }
@@ -265,6 +295,64 @@ export default function GlobalIssues() {
       if (res.success && res.data) setProjects(res.data.data ?? []);
     });
   }, [token]);
+
+  const filterScopeProjectId = filters.project.length === 1 ? filters.project[0] : null;
+
+  const bulkScopeProjectId = useMemo(() => {
+    if (filterScopeProjectId) return filterScopeProjectId;
+    const selected = issues.filter((i) => selectedIssueIds.has(i._id));
+    if (selected.length === 0) return null;
+    const projectIds = new Set(
+      selected.map((i) =>
+        i.project && typeof i.project === 'object' && '_id' in i.project
+          ? String((i.project as { _id: string })._id)
+          : String(i.project ?? '')
+      )
+    );
+    return projectIds.size === 1 ? [...projectIds][0] : null;
+  }, [filterScopeProjectId, issues, selectedIssueIds]);
+
+  const bulkScopeProject = useMemo(
+    () => (bulkScopeProjectId ? projects.find((p) => p._id === bulkScopeProjectId) ?? null : null),
+    [projects, bulkScopeProjectId]
+  );
+
+  useEffect(() => {
+    if (!token || !filterScopeProjectId) {
+      setSprints([]);
+      setMilestones([]);
+      return;
+    }
+    sprintsApi.list(1, 100, filterScopeProjectId, undefined, token).then((res) => {
+      if (res.success && res.data) setSprints(res.data.data ?? []);
+    });
+    milestonesApi.list(filterScopeProjectId, token).then((res) => {
+      if (res.success && res.data) setMilestones(Array.isArray(res.data) ? res.data : []);
+    });
+  }, [token, filterScopeProjectId]);
+
+  useEffect(() => {
+    if (!token || !bulkScopeProjectId || bulkModal !== 'edit') {
+      setBulkSprints([]);
+      setBulkMilestones([]);
+      setBulkParentCandidates([]);
+      return;
+    }
+    sprintsApi.list(1, 100, bulkScopeProjectId, undefined, token).then((res) => {
+      if (res.success && res.data) setBulkSprints(res.data.data ?? []);
+    });
+    milestonesApi.list(bulkScopeProjectId, token).then((res) => {
+      if (res.success && res.data) setBulkMilestones(Array.isArray(res.data) ? res.data : []);
+    });
+    issuesApi
+      .list({ token, project: bulkScopeProjectId, page: 1, limit: 200 })
+      .then((res) => {
+        if (res.success && res.data) {
+          const list = (res.data.data ?? []).filter((i) => !selectedIssueIds.has(i._id));
+          setBulkParentCandidates(list);
+        }
+      });
+  }, [token, bulkScopeProjectId, bulkModal, selectedIssueIds]);
 
   useEffect(() => {
     if (!token) return;
@@ -295,6 +383,10 @@ export default function GlobalIssues() {
         setJqlError(res.message ?? 'JQL query failed');
       }
     });
+
+    issuesApi.getQuickFilterCounts(token).then((res) => {
+      if (res.success && res.data) setTotalCounts(res.data);
+    });
   }, [token, searchParams.toString()]);
 
   useEffect(() => {
@@ -316,6 +408,26 @@ export default function GlobalIssues() {
   }, [form.project, token]);
 
   useEffect(() => {
+    if (!token || !form.project) {
+      setModalUsers([]);
+      return;
+    }
+    projectsApi.getMembers(form.project, token).then((res) => {
+      if (res.success && res.data) {
+        const members = Array.isArray(res.data) ? res.data : [];
+        const flattened = members.map((m) => ({
+          _id: m.user._id,
+          name: m.user.name,
+          email: m.user.email,
+        }));
+        setModalUsers(flattened as unknown as User[]);
+      } else {
+        setModalUsers([]);
+      }
+    });
+  }, [form.project, token]);
+
+  useEffect(() => {
     if (form.project && token) {
       issuesApi
         .list({
@@ -325,12 +437,20 @@ export default function GlobalIssues() {
           limit: 200,
         })
         .then((res) => {
-          if (res.success && res.data) setParentCandidates(res.data.data ?? []);
+          if (res.success && res.data) {
+            setParentCandidates(
+              filterParentCandidates(
+                res.data.data ?? [],
+                editIssue?._id,
+                resolveIssueParentId(editIssue?.parent)
+              )
+            );
+          }
         });
     } else {
       setParentCandidates([]);
     }
-  }, [form.project, token]);
+  }, [form.project, token, editIssue?._id, modal]);
 
   useEffect(() => {
     if (form.project && token) {
@@ -373,7 +493,7 @@ export default function GlobalIssues() {
       parent: initialParent ?? '',
       milestone: '',
       customFieldValues: {},
-      fixVersion: '',
+      fixVersion: [] as string[],
       affectsVersions: [],
       labels: [],
     });
@@ -396,10 +516,10 @@ export default function GlobalIssues() {
       assignee: typeof issue.assignee === 'object' && issue.assignee ? issue.assignee._id : '',
       sprint: typeof issue.sprint === 'object' && issue.sprint ? issue.sprint._id : '',
       storyPoints: issue.storyPoints != null ? String(issue.storyPoints) : '',
-      parent: typeof issue.parent === 'object' && issue.parent ? issue.parent._id : '',
+      parent: resolveIssueParentId(issue.parent),
       milestone: typeof issue.milestone === 'object' && issue.milestone ? issue.milestone._id : '',
       customFieldValues: { ...(issue.customFieldValues ?? {}) },
-      fixVersion: issue.fixVersion ?? '',
+      fixVersion: normalizeFixVersionIds(issue.fixVersion),
       affectsVersions: issue.affectsVersions ?? [],
       labels: issue.labels ?? [],
     });
@@ -433,16 +553,8 @@ export default function GlobalIssues() {
 
   async function handleBulkUpdate() {
     if (!token || selectedIssueIds.size === 0) return;
-    const updates: Parameters<typeof issuesApi.bulkUpdate>[1] = {};
-    if (bulkForm.status) updates.status = bulkForm.status;
-    if (bulkForm.assignee !== undefined) updates.assignee = bulkForm.assignee === '__unassigned__' ? null : bulkForm.assignee || null;
-    if (bulkForm.sprint !== undefined) updates.sprint = bulkForm.sprint === '__backlog__' ? null : bulkForm.sprint || null;
-    if (bulkForm.storyPoints !== undefined) {
-      updates.storyPoints = bulkForm.storyPoints === '__clear__' ? null : Number(bulkForm.storyPoints);
-    }
-    if (bulkForm.type) updates.type = bulkForm.type;
-    if (bulkForm.priority) updates.priority = bulkForm.priority;
-    if (Object.keys(updates).length === 0) return;
+    const updates = buildBulkUpdates(bulkForm);
+    if (!updates) return;
     setBulkSubmitting(true);
     const res = await issuesApi.bulkUpdate(Array.from(selectedIssueIds), updates, token);
     setBulkSubmitting(false);
@@ -525,7 +637,7 @@ export default function GlobalIssues() {
           parent: form.parent || undefined,
           milestone: form.milestone || undefined,
           customFieldValues: Object.keys(form.customFieldValues).length ? form.customFieldValues : undefined,
-          fixVersion: form.fixVersion || undefined,
+          fixVersion: form.fixVersion.length ? form.fixVersion : undefined,
           affectsVersions: form.affectsVersions.length ? form.affectsVersions : undefined,
           labels: form.labels.length ? form.labels : undefined,
         },
@@ -545,6 +657,12 @@ export default function GlobalIssues() {
           setPendingFiles([]);
         }
         setModal(null);
+        showToast({
+          title: `Issue Created : ${getIssueKey(res.data)}`,
+          body: 'click to view',
+          url: `/projects/${typeof res.data.project === 'object' ? res.data.project._id : res.data.project}/issues/${encodeURIComponent(getIssueKey(res.data))}`,
+          autoDismissMs: 5000,
+        });
         updateUrl({ page: 1 });
         issuesApi.list(buildListParams({ page: 1 })).then((r) => {
           if (r.success && r.data) {
@@ -568,7 +686,7 @@ export default function GlobalIssues() {
           parent: form.parent || null,
           milestone: form.milestone || null,
           customFieldValues: form.customFieldValues,
-          fixVersion: form.fixVersion || undefined,
+          fixVersion: form.fixVersion.length ? form.fixVersion : undefined,
           affectsVersions: form.affectsVersions.length ? form.affectsVersions : undefined,
           labels: form.labels,
         },
@@ -603,6 +721,30 @@ export default function GlobalIssues() {
             savedFiltersError={null}
             applySavedFilter={() => {}}
             removeSavedFilter={() => {}}
+            totalCounts={totalCounts}
+          />
+
+          {!useJql && (
+            <QuickFilterLabelFilters
+              quickFilter={quickFilter}
+              labelCounts={quickFilterLabelCounts}
+              selectedLabels={filters.labels}
+              onToggleLabel={(label) => toggleFilter('labels', label)}
+              onClearLabels={() => updateUrl({ filters: { ...filters, labels: [] }, page: 1 })}
+              loading={totalCounts === null}
+            />
+          )}
+
+          <ActiveFilterChips
+            filters={filters}
+            quickFilter={quickFilter}
+            updateUrl={updateUrl}
+            users={users}
+            projects={projects}
+            sprints={sprints}
+            milestones={milestones}
+            versions={versions}
+            onOpenFilterModal={() => setFiltersOpen(true)}
           />
 
           <IssuesToolbar
@@ -659,6 +801,8 @@ export default function GlobalIssues() {
                 project={projectForTable}
                 projects={projects}
                 visibleColumnIds={visibleColumnIds}
+                columnWidths={columnsConfig.widths}
+                onColumnWidthChange={setColumnWidth}
                 selectedIssueIds={selectedIssueIds}
                 toggleSelectIssue={toggleSelectIssue}
                 toggleSelectAll={toggleSelectAll}
@@ -743,6 +887,9 @@ export default function GlobalIssues() {
         saveCurrentFilter={() => {}}
         hasActiveFilters={hasActiveFilters}
         projects={projects}
+        sprints={sprints}
+        milestones={milestones}
+        versions={versions}
       />
 
       <ColumnsConfigModal
@@ -768,8 +915,9 @@ export default function GlobalIssues() {
         typeList={selectedProject ? (selectedProject.issueTypes?.map((t) => t.name) ?? DEFAULT_TYPES) : typeList}
         priorityList={selectedProject ? (selectedProject.priorities?.map((p) => p.name) ?? DEFAULT_PRIORITIES) : priorityList}
         statusList={selectedProject ? (selectedProject.statuses?.map((s) => s.name) ?? DEFAULT_STATUSES) : statusList}
-        users={users}
+        users={modalUsers}
         parentCandidates={parentCandidates}
+        editingIssueId={editIssue?._id}
         project={selectedProject}
         getIssueKey={getIssueKey}
         projects={projects}
@@ -791,9 +939,14 @@ export default function GlobalIssues() {
         submitError={submitError}
         statusList={statusList}
         users={users}
-        sprints={sprints}
+        sprints={bulkScopeProjectId ? bulkSprints : sprints}
         typeList={typeList}
         priorityList={priorityList}
+        milestones={bulkScopeProjectId ? bulkMilestones : milestones}
+        versions={bulkScopeProject?.versions ?? (bulkScopeProjectId ? [] : versions)}
+        labelSuggestions={allLabels}
+        parentCandidates={bulkParentCandidates}
+        showProjectScopedFields={Boolean(bulkScopeProjectId)}
       />
 
       <ConfirmModal

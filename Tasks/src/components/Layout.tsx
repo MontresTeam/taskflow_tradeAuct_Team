@@ -4,7 +4,14 @@ import { useAuth } from '../contexts/AuthContext';
 import { useNotifications } from '../contexts/NotificationsContext';
 import { toAppPath } from '../lib/navigationUrl';
 import NotificationToast from './NotificationToast';
+import SuccessToast from './SuccessToast';
+import ConfirmModal from './ConfirmModal';
+import { taskflowAppSettingsHref } from '../lib/appSettingsHref';
 import { projectsApi, issuesApi, type Project, type Issue, getIssueKey } from '../lib/api';
+import { APP_VERSION } from '../appVersion';
+import { canAccessTaskflowWorkspaceSettings } from '../utils/taskflowWorkspaceSettingsAccess';
+import { userHasPermission } from '../utils/permissions';
+import { PROJECT_PERMISSIONS } from '@shared/constants/permissions';
 import {
   DashboardIcon,
   InboxIcon,
@@ -19,6 +26,7 @@ import {
   VersionsIcon,
   TimesheetIcon,
   SettingsIcon,
+  AppHubSettingsIcon,
   SearchIcon,
   SunIcon,
   MoonIcon,
@@ -38,69 +46,82 @@ interface NavItem {
   end?: boolean;
 }
 
-function buildGlobalNav(user: { mustChangePassword?: boolean; permissions?: string[]; role?: string } | null): NavItem[] {
+function buildGlobalNav(
+  user: { mustChangePassword?: boolean; permissions?: string[]; role?: string; userType?: string; organizations?: { id: string }[] } | null
+): NavItem[] {
   const perms = user?.permissions ?? [];
-  const firstLogin = user?.mustChangePassword === true;
-  if (firstLogin) {
-    return [
-      { to: '/inbox', label: 'Inbox', icon: <InboxIcon /> },
-      { to: '/projects', label: 'Projects', icon: <ProjectsIcon /> },
-      { to: '/project-templates', label: 'Templates', icon: <PackageIcon /> },
-      { to: '/profile', label: 'Profile', icon: <ProfileIcon /> },
-    ];
-  }
   const nav: NavItem[] = [
     { to: '/', label: 'Dashboard', icon: <DashboardIcon />, end: true },
     { to: '/inbox', label: 'Inbox', icon: <InboxIcon /> },
   ];
-  const has = (p: string) => perms.includes(p);
-  if (has('project.project.list') || has('projects:list') || has('project.project.create') || has('projects:create')) {
+  const can = (...required: string[]) => required.some((p) => userHasPermission(perms, p));
+
+  if (
+    can(
+      'project.project.list',
+      'projects:list',
+      'project.project.create',
+      'projects:create'
+    )
+  ) {
     nav.push({ to: '/projects', label: 'Projects', icon: <ProjectsIcon /> });
   }
-  if (has('project.project.create') || has('projects:create')) {
+  if (can('project.project.create', 'projects:create')) {
     nav.push({ to: '/project-templates', label: 'Templates', icon: <PackageIcon /> });
   }
-  if (has('project.project.list') || has('projects:list')) {
+  if (can('project.project.list', 'projects:list')) {
     nav.push({ to: '/issues', label: 'All Issues', icon: <IssuesIcon /> });
   }
-  if (has('taskflow.report.read') || has('reports:view')) {
+  if (can('taskflow.report.read', 'reports:view')) {
     nav.push({ to: '/timesheet', label: 'Timesheet', icon: <TimesheetIcon /> });
-  }
-  if (has('taskflow.analytics.view') || has('analytics:view')) {
-    nav.push({ to: '/performance-report', label: 'Performance', icon: <TimesheetIcon /> });
-    nav.push({ to: '/workload', label: 'Workload', icon: <TimesheetIcon /> });
-  }
-  if (has('taskflow.report.read') || has('reports:view')) {
     nav.push({ to: '/estimates', label: 'Estimates', icon: <TimesheetIcon /> });
-  }
-  if (user?.role === 'admin') {
-    nav.push({ to: '/audit-logs', label: 'Audit logs', icon: <SettingsIcon /> });
-  }
-  if (has('taskflow.analytics.view') || has('analytics:view')) {
-    nav.push({ to: '/analytics', label: 'Analytics', icon: <SettingsIcon /> });
-  }
-  if (has('taskflow.report.read') || has('reports:view')) {
     nav.push({ to: '/reports', label: 'Reports', icon: <SettingsIcon /> });
   }
-  if (has('taskflow.cost_report.view')) {
+  if (can('taskflow.analytics.view', 'analytics:view')) {
+    nav.push({ to: '/performance-report', label: 'Performance', icon: <TimesheetIcon /> });
+    nav.push({ to: '/workload', label: 'Workload', icon: <TimesheetIcon /> });
+    nav.push({ to: '/analytics', label: 'Analytics', icon: <SettingsIcon /> });
+  }
+  if (
+    can('taskflow.analytics.view', 'analytics:view', 'taskflow.report.read', 'reports:view', 'project.project.list', 'projects:list')
+  ) {
+    nav.push({ to: '/portfolio', label: 'Portfolio', icon: <SettingsIcon /> });
+    nav.push({ to: '/defect-metrics', label: 'Defect Metrics', icon: <SettingsIcon /> });
+  }
+  if (user?.role === 'admin') {
+    nav.push({ to: '/executive', label: 'Executive', icon: <SettingsIcon /> });
+    nav.push({ to: '/audit-logs', label: 'Audit logs', icon: <SettingsIcon /> });
+  }
+  if (can('taskflow.cost_report.view')) {
     nav.push({ to: '/cost-usage', label: 'Cost report', icon: <TimesheetIcon /> });
   }
-  if (has('auth.user.list') || has('auth.user.create') || has('users:list') || has('users:invite')) {
+  if (can('auth.user.list', 'auth.user.create', 'users:list', 'users:invite')) {
     nav.push({ to: '/users', label: 'Users', icon: <UsersIcon /> });
   }
-  if (has('auth.role.manage_all') || has('roles:manage')) {
+  if (can('auth.role.manage_all', 'roles:manage')) {
     nav.push({ to: '/roles', label: 'Roles', icon: <RolesIcon /> });
   }
   if (
-    has('taskflow.customer_portal.org.manage') ||
-    has('taskflow.customer_portal.org.view') ||
-    has('customers:manage') ||
-    has('customers:view')
+    can(
+      'taskflow.customer_portal.org.manage',
+      'taskflow.customer_portal.org.view',
+      'customers:manage',
+      'customers:view'
+    )
   ) {
     nav.push({ to: '/admin/customer-orgs', label: 'Customer Orgs', icon: <UsersIcon /> });
   }
-  if (has('taskflow.customer_portal.request.approve') || has('customer-requests:approve')) {
+  if (can('taskflow.customer_portal.request.approve', 'customer-requests:approve')) {
     nav.push({ to: '/admin/customer-requests', label: 'Customer Requests', icon: <IssuesIcon /> });
+  }
+  if (
+    user &&
+    'userType' in user &&
+    user.userType === 'taskflow' &&
+    (user.organizations?.length ?? 0) > 0 &&
+    canAccessTaskflowWorkspaceSettings(user)
+  ) {
+    nav.push({ to: '/settings/workspace', label: 'Workspace', icon: <AppHubSettingsIcon /> });
   }
   nav.push({ to: '/profile', label: 'Profile', icon: <ProfileIcon /> });
   return nav;
@@ -109,13 +130,39 @@ function buildGlobalNav(user: { mustChangePassword?: boolean; permissions?: stri
 const PROJECT_NAV_ITEMS: { to: string; label: string; icon: ReactNode; permission: string; global?: boolean; globalPerm?: boolean }[] = [
   { to: '/dashboard', label: 'Dashboard', icon: <DashboardIcon />, permission: 'issue.issue.read' },
   { to: '/issues', label: 'Issues', icon: <IssuesIcon />, permission: 'issue.issue.read' },
+  { to: '/link-graph', label: 'Link graph', icon: <GanttIcon />, permission: 'issue.issue.read' },
   { to: '/boards', label: 'Boards', icon: <BoardsIcon />, permission: 'board.board.read' },
   { to: '/backlog', label: 'Backlog', icon: <BoardsIcon />, permission: 'sprint.sprint.read' },
   { to: '/sprints', label: 'Sprints', icon: <SprintsIcon />, permission: 'sprint.sprint.read' },
   { to: '/gantt', label: 'Gantt', icon: <GanttIcon />, permission: 'issue.issue.read' },
   { to: '/roadmap', label: 'Roadmap', icon: <GanttIcon />, permission: 'roadmap.roadmap.read' },
   { to: '/versions', label: 'Versions', icon: <VersionsIcon />, permission: 'version.version.read' },
+  {
+    to: '/test-cases',
+    label: 'Test Cases',
+    icon: <BoardsIcon />,
+    permission: PROJECT_PERMISSIONS.TEST_MANAGEMENT.SUITE.READ,
+  },
+  {
+    to: '/test-plans',
+    label: 'Test Plans',
+    icon: <BoardsIcon />,
+    permission: PROJECT_PERMISSIONS.TEST_MANAGEMENT.SUITE.READ,
+  },
+  {
+    to: '/traceability',
+    label: 'Traceability',
+    icon: <GanttIcon />,
+    permission: PROJECT_PERMISSIONS.TEST_MANAGEMENT.SUITE.READ,
+  },
+  { to: '/defect-metrics', label: 'Defect Metrics', icon: <TimesheetIcon />, permission: 'issue.issue.read' },
   { to: '/timesheet', label: 'Timesheet', icon: <TimesheetIcon />, permission: 'issue.issue.read' },
+  {
+    to: '/estimate-approvals',
+    label: 'Estimate approvals',
+    icon: <TimesheetIcon />,
+    permission: PROJECT_PERMISSIONS.ISSUE.ESTIMATE.VIEW,
+  },
   { to: '/settings', label: 'Settings', icon: <SettingsIcon />, permission: 'setting.project_setting.update' },
 ];
 
@@ -125,17 +172,13 @@ function projectNav(projectId: string, projectPermissions: string[], globalPermi
   const gp = globalPermissions;
   const can = (item: (typeof PROJECT_NAV_ITEMS)[number]) => {
     if (item.globalPerm) {
-      return gp.includes(item.permission) || gp.includes('taskflow.hr.designation.manage') || gp.includes('designations:manage');
+      return (
+        userHasPermission(gp, item.permission) ||
+        userHasPermission(gp, 'taskflow.hr.designation.manage') ||
+        userHasPermission(gp, 'designations:manage')
+      );
     }
-    return (
-      pp.includes(item.permission) ||
-      (item.permission === 'issue.issue.read' && (pp.includes('project:view') || pp.includes('issues:view'))) ||
-      (item.permission === 'board.board.read' && pp.includes('boards:view')) ||
-      (item.permission === 'sprint.sprint.read' && pp.includes('sprints:view')) ||
-      (item.permission === 'roadmap.roadmap.read' && pp.includes('roadmaps:view')) ||
-      (item.permission === 'version.version.read' && pp.includes('versions:view')) ||
-      (item.permission === 'setting.project_setting.update' && pp.includes('settings:manage'))
-    );
+    return userHasPermission(pp, item.permission) || userHasPermission(gp, item.permission);
   };
   const items = [
     { to: '/projects', label: 'Projects', icon: <ProjectsIcon />, end: true },
@@ -150,16 +193,19 @@ function projectNav(projectId: string, projectPermissions: string[], globalPermi
 }
 
 export default function Layout({ children }: { children: React.ReactNode }) {
-  const { user, logout, token } = useAuth();
+  const { user, logout, token, switchWorkspace } = useAuth();
   const {
     latestInboxMessage,
     latestPushNotification,
     dismissInboxToast,
     dismissPushToast,
     notifications,
+    inboxUnreadCount,
     unreadCount,
     markRead,
     markAllRead,
+    appToast,
+    dismissAppToast,
   } = useNotifications();
   const navigate = useNavigate();
   const location = useLocation();
@@ -257,7 +303,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
-
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   useEffect(() => {
     if (!searchQuery.trim()) {
       setSearchResults([]);
@@ -278,7 +324,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     return () => clearTimeout(t);
   }, [searchQuery, token, projectId]);
 
-  function handleLogout() {
+  function performLogout() {
+    setLogoutConfirmOpen(false);
     logout();
     navigate('/login');
   }
@@ -339,39 +386,128 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                     isProjectsLink ? isActive : isActive || (projectId && location.pathname.startsWith(item.to));
                   return `sidebar-nav-item animation-delay-${(i + 1) * 100} animate-fade-in ${
                     sidebarCollapsed ? 'justify-center' : ''
-                  } ${active ? 'active' : ''}`;
+                  } ${active ? 'active' : ''} relative`;
                 }}
               >
                 <span className="w-5 h-5 flex shrink-0 items-center justify-center">{item.icon}</span>
                 {!sidebarCollapsed && <span className="truncate">{item.label}</span>}
+                {item.to === '/inbox' && inboxUnreadCount > 0 && (
+                  <span
+                    className={`ml-auto min-w-5 h-5 px-1.5 rounded-full text-[10px] font-semibold flex items-center justify-center bg-[color:var(--color-blocked)] text-white ${
+                      sidebarCollapsed ? 'absolute -top-0.5 -right-0.5' : ''
+                    }`}
+                    aria-label={`${inboxUnreadCount} unread inbox items`}
+                  >
+                    {inboxUnreadCount > 99 ? '99+' : inboxUnreadCount}
+                  </span>
+                )}
               </NavLink>
             );
           })}
         </nav>
-        <div className={`p-3 border-t border-[color:var(--sidebar-active-bg)] space-y-2 ${sidebarCollapsed ? 'flex flex-col items-center' : ''}`}>
-          {!sidebarCollapsed && (
-            <div className="px-3 py-2 text-[color:var(--sidebar-text)] text-[11px] font-medium truncate" title={user?.email}>
-              {user?.name}
-            </div>
+        <div
+          className={`border-t border-[color:var(--sidebar-active-bg)] p-3 ${
+            sidebarCollapsed ? 'flex flex-col items-center gap-2' : 'space-y-2'
+          }`}
+        >
+          {!sidebarCollapsed ? (
+            <>
+              <Link
+                to="/profile"
+                className="block rounded-md px-1 py-1 text-left transition hover:bg-[color:var(--sidebar-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent)]/35 focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--sidebar-bg)]"
+                title={user?.email}
+              >
+                <div className="truncate text-xs font-medium text-[color:var(--sidebar-text-active)]">
+                  {user?.name ?? 'Profile'}
+                </div>
+                {user?.email && (
+                  <div className="mt-0.5 truncate text-[10px] text-[color:var(--sidebar-text)]/80">{user.email}</div>
+                )}
+              </Link>
+              <button
+                type="button"
+                onClick={() => setLogoutConfirmOpen(true)}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[color:var(--sidebar-text)] transition hover:bg-[color:var(--sidebar-hover-bg)] hover:text-[color:var(--sidebar-text-active)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent)]/35 focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--sidebar-bg)]"
+              >
+                <LogOutIcon className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                Sign out
+              </button>
+              <p className="px-1 pt-1 text-[10px] text-[color:var(--sidebar-text)]/50" title={`TaskFlow v${APP_VERSION}`}>
+                v{APP_VERSION}
+              </p>
+            </>
+          ) : (
+            <>
+              <Link
+                to="/profile"
+                title={user?.name ?? 'Profile'}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[color:var(--sidebar-logo-bg)] text-xs font-semibold text-[color:var(--sidebar-text-active)] hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent)]/40"
+              >
+                {(user?.name?.trim().charAt(0) || user?.email?.charAt(0) || '?').toUpperCase()}
+              </Link>
+              <button
+                type="button"
+                onClick={() => setLogoutConfirmOpen(true)}
+                title="Sign out"
+                aria-label="Sign out"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-[color:var(--sidebar-text)] transition hover:bg-[color:var(--sidebar-hover-bg)] hover:text-[color:var(--sidebar-text-active)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent)]/40"
+              >
+                <LogOutIcon className="h-4 w-4" aria-hidden />
+              </button>
+              <span className="text-[9px] text-[color:var(--sidebar-text)]/50" title={`TaskFlow v${APP_VERSION}`}>
+                v{APP_VERSION}
+              </span>
+            </>
           )}
-          <button
-            type="button"
-            onClick={handleLogout}
-            title="Sign out"
-            className={`flex items-center justify-center rounded-md text-[color:var(--sidebar-text)] border border-transparent hover:border-[color:var(--sidebar-active-bg)] hover:bg-[color:var(--sidebar-hover-bg)] hover:text-[color:var(--sidebar-text-active)] transition ${
-              sidebarCollapsed ? 'w-full py-2 px-0' : 'w-full px-3 py-1.5 text-xs'
-            }`}
-          >
-            {sidebarCollapsed ? (
-              <LogOutIcon className="w-5 h-5" aria-hidden />
-            ) : (
-              'Sign out'
-            )}
-          </button>
         </div>
       </aside>
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="shrink-0 flex items-center justify-end gap-3 px-4 py-2 border-b border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] shadow-[0_1px_0_var(--border-subtle)]">
+        <header className="shrink-0 flex flex-wrap items-center gap-2 sm:gap-3 px-4 py-2 border-b border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] shadow-[0_1px_0_var(--border-subtle)]">
+          <div className="relative min-w-0 flex-1 basis-full sm:basis-auto max-w-md">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onFocus={() => projectId && searchResults.length > 0 && setSearchOpen(true)}
+              placeholder={projectId ? 'Search by Ticket ID or title…' : 'Open a project to search issues'}
+              disabled={!projectId}
+              className="w-full px-3 py-1.5 pl-8 rounded-md bg-[color:var(--bg-elevated)] border border-[color:var(--border-subtle)] text-[color:var(--text-primary)] placeholder-[color:var(--text-muted)] text-xs focus:bg-[color:var(--bg-surface)] focus:border-[color:var(--accent)] focus:ring-1 focus:ring-[color:var(--accent)]/40 outline-none disabled:opacity-60 disabled:cursor-not-allowed transition"
+            />
+            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[color:var(--text-muted)] pointer-events-none">
+              {searchLoading ? (
+                <span className="text-[10px]">…</span>
+              ) : (
+                <SearchIcon className="w-3.5 h-3.5" />
+              )}
+            </span>
+            {searchOpen && projectId && searchResults.length > 0 && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setSearchOpen(false)} />
+                <div className="absolute right-0 z-20 mt-1 w-full rounded-lg bg-[color:var(--bg-elevated)] border border-[color:var(--border-subtle)] shadow-[0_8px_24px_rgba(0,0,0,0.24)] max-h-64 overflow-y-auto">
+                  {searchResults.map((issue) => (
+                    <Link
+                      key={issue._id}
+                      to={`/projects/${projectId}/issues/${encodeURIComponent(getIssueKey(issue))}`}
+                      onClick={() => {
+                        setSearchOpen(false);
+                        setSearchQuery('');
+                        setSearchResults([]);
+                      }}
+                      className="flex items-center gap-2 px-3 py-2 hover:bg-[color:var(--bg-surface)] text-left transition"
+                    >
+                      <span className="font-mono text-[11px] text-[color:var(--text-muted)] shrink-0">
+                        {getIssueKey(issue)}
+                      </span>
+                      <span className="text-xs text-[color:var(--text-primary)] truncate">
+                        {issue.title}
+                      </span>
+                    </Link>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+          <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2 sm:gap-3">
           <button
             type="button"
             onClick={toggleFullScreen}
@@ -401,7 +537,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               className="relative inline-flex h-8 w-8 items-center justify-center rounded-full border border-[color:var(--border-subtle)] text-[color:var(--text-muted)] hover:bg-[color:var(--bg-surface)] hover:text-[color:var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]/40 focus:ring-offset-0 transition"
             >
               <BellIcon className="w-3.5 h-3.5" />
-              {(unreadCount > 0 || latestInboxMessage || latestPushNotification) && (
+              {(unreadCount > 0 || latestPushNotification) && (
                 <span
                   className="absolute -top-0.5 -right-0.5 min-w-2.5 h-2.5 px-1 rounded-full bg-[color:var(--color-blocked)] ring-2 ring-[color:var(--bg-surface)] text-[10px] text-white flex items-center justify-center"
                   aria-hidden
@@ -469,48 +605,44 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               </>
             )}
           </div>
-          <div className="relative w-full max-w-xs">
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onFocus={() => projectId && searchResults.length > 0 && setSearchOpen(true)}
-              placeholder={projectId ? 'Search by Ticket ID or title…' : 'Open a project to search issues'}
-              disabled={!projectId}
-              className="w-full px-3 py-1.5 pl-8 rounded-md bg-[color:var(--bg-elevated)] border border-[color:var(--border-subtle)] text-[color:var(--text-primary)] placeholder-[color:var(--text-muted)] text-xs focus:bg-[color:var(--bg-surface)] focus:border-[color:var(--accent)] focus:ring-1 focus:ring-[color:var(--accent)]/40 outline-none disabled:opacity-60 disabled:cursor-not-allowed transition"
-            />
-            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[color:var(--text-muted)] pointer-events-none">
-              {searchLoading ? (
-                <span className="text-[10px]">…</span>
-              ) : (
-                <SearchIcon className="w-3.5 h-3.5" />
-              )}
-            </span>
-            {searchOpen && projectId && searchResults.length > 0 && (
-              <>
-                <div className="fixed inset-0 z-10" onClick={() => setSearchOpen(false)} />
-                <div className="absolute right-0 z-20 mt-1 w-full rounded-lg bg-[color:var(--bg-elevated)] border border-[color:var(--border-subtle)] shadow-[0_8px_24px_rgba(0,0,0,0.24)] max-h-64 overflow-y-auto">
-                  {searchResults.map((issue) => (
-                    <Link
-                      key={issue._id}
-                      to={`/projects/${projectId}/issues/${encodeURIComponent(getIssueKey(issue))}`}
-                      onClick={() => {
-                        setSearchOpen(false);
-                        setSearchQuery('');
-                        setSearchResults([]);
-                      }}
-                      className="flex items-center gap-2 px-3 py-2 hover:bg-[color:var(--bg-surface)] text-left transition"
-                    >
-                      <span className="font-mono text-[11px] text-[color:var(--text-muted)] shrink-0">
-                        {getIssueKey(issue)}
-                      </span>
-                      <span className="text-xs text-[color:var(--text-primary)] truncate">
-                        {issue.title}
-                      </span>
-                    </Link>
+            {user?.userType === 'taskflow' && (user.organizations?.length ?? 0) > 0 && (
+              <label className="flex min-w-0 max-w-[10rem] sm:max-w-[14rem] items-center gap-2 text-xs text-[color:var(--text-muted)]">
+                <span className="hidden xl:inline whitespace-nowrap">Workspace</span>
+                <select
+                  className="min-w-0 flex-1 truncate rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] px-2 py-1 text-xs text-[color:var(--text-primary)]"
+                  value={user.activeOrganizationId ?? user.organizations![0].id}
+                  onChange={async (e) => {
+                    const id = e.target.value;
+                    if (!id || id === user.activeOrganizationId) return;
+                    const r = await switchWorkspace(id);
+                    if (!r.ok) {
+                      window.alert(r.error ?? 'Could not switch workspace');
+                      return;
+                    }
+                    navigate('/projects', { replace: true });
+                  }}
+                  title="Switch workspace"
+                >
+                  {user.organizations?.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name}
+                    </option>
                   ))}
-                </div>
-              </>
+                </select>
+              </label>
+            )}
+            {user?.userType === 'taskflow' && (
+              <button
+                type="button"
+                onClick={() => {
+                  window.open(taskflowAppSettingsHref(), '_blank', 'noopener,noreferrer');
+                }}
+                aria-label="Workspace hub and inbox window (opens in new tab)"
+                title="Workspace hub"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[color:var(--accent)]/50 text-[color:var(--text-muted)] hover:bg-[color:var(--bg-surface)] hover:text-[color:var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]/40 focus:ring-offset-0 transition shadow-[0_0_0_1px_var(--accent)_inset]"
+              >
+                <AppHubSettingsIcon className="w-3.5 h-3.5" />
+              </button>
             )}
           </div>
         </header>
@@ -546,6 +678,31 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           })()}
         </div>
       </div>
+      
+      {/* Bottom left local app toasts */}
+      <div className="fixed bottom-4 left-4 z-50 flex flex-col gap-2 pointer-events-none">
+        <div className="pointer-events-auto">
+          {appToast && (
+            <SuccessToast
+              title={appToast.title}
+              body={appToast.body}
+              url={appToast.url}
+              autoDismissMs={appToast.autoDismissMs ?? 5000}
+              onDismiss={dismissAppToast}
+            />
+          )}
+        </div>
+      </div>
+
+      <ConfirmModal
+        open={logoutConfirmOpen}
+        title="Sign out?"
+        message="You will need to sign in again to continue."
+        confirmLabel="Sign out"
+        variant="default"
+        onConfirm={performLogout}
+        onCancel={() => setLogoutConfirmOpen(false)}
+      />
     </div>
   );
 }

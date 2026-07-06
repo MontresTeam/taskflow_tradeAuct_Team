@@ -13,10 +13,10 @@ import {
 } from '../../constants/permissions';
 import { mapLegacyProjectOrGlobalPermissions } from '../../shared/constants/legacyPermissionMap';
 import * as inboxService from '../inbox/inbox.service';
-import { sendProjectInviteEmail } from '../../services/email.service';
-import { sendPushToUser } from '../../services/push.service';
+import { renderProjectInviteEmail } from '../../services/email.service';
 import { env } from '../../config/env';
-import * as notificationsService from '../notifications/notifications.service';
+import { notifyUser } from '../notifications/notificationDispatch.service';
+import { shouldSend } from '../notifications/notificationPreference.service';
 
 const PROJECT_MEMBER_ROLE_NAME = 'Project Member';
 const PROJECT_LEAD_ROLE_NAME = 'Project Lead';
@@ -148,13 +148,16 @@ export async function inviteToProject(
   if (pendingInvite) throw new ApiError(409, 'User has already been invited.');
 
   let roleObjectId: mongoose.Types.ObjectId;
+  let roleName: string | undefined;
   if (roleId) {
-    const role = await Role.findById(roleId).select('_id').lean();
+    const role = await Role.findById(roleId).select('_id name').lean();
     if (!role) throw new ApiError(400, 'Selected role not found');
     roleObjectId = role._id;
+    roleName = (role as { name?: string }).name;
   } else {
     const role = await getOrCreateProjectMemberRole();
     roleObjectId = role._id;
+    roleName = (role as { name?: string }).name;
   }
   await ProjectInvitation.deleteOne({ project: projectId, user: userIdStr });
 
@@ -172,26 +175,34 @@ export async function inviteToProject(
 
   const title = `Project invitation: ${projectName}`;
   const body = `${inviterName} invited you to the project "${projectName}". Open your inbox to accept or decline.`;
-  await inboxService.createMessage({
-    toUser: userIdStr,
-    type: 'project_invitation',
-    title,
-    body,
-    meta: { invitationId: invitation._id.toString(), url: `${env.appUrl}/inbox` },
-  });
+  const inviteLink = `${env.appUrl}/inbox`;
 
-  sendProjectInviteEmail((user as { email: string }).email, {
+  if (await shouldSend(userIdStr, 'project_invitation', 'in_app')) {
+    await inboxService.createMessage({
+      toUser: userIdStr,
+      type: 'project_invitation',
+      title,
+      body,
+      meta: { invitationId: invitation._id.toString(), url: inviteLink },
+    });
+  }
+
+  const inviteHtml = renderProjectInviteEmail({
     projectName,
     inviterName,
     appUrl: env.appUrl,
-  }).catch((err) => console.error('Failed to send project invite email:', err));
+    roleName,
+  });
 
-  sendPushToUser(userIdStr, {
+  await notifyUser({
+    userId: userIdStr,
+    eventKey: 'project_invitation',
     title: 'Project invitation',
-    body: `You were invited to the project "${projectName}". Open your inbox to accept or decline.`,
-    url: `${env.appUrl}/inbox`,
-    data: { type: 'project_invitation', invitationId: invitation._id.toString() },
-  }).catch((err) => console.error('Failed to send push notification:', err));
+    body,
+    link: inviteLink,
+    html: inviteHtml,
+    metadata: { type: 'project_invitation', invitationId: invitation._id.toString() },
+  }).catch((err) => console.error('Failed to send project invitation notification:', err));
 
   return ProjectInvitation.findById(invitation._id)
     .populate('user', 'name email')
@@ -307,9 +318,9 @@ export async function acceptInvitation(invitationId: string, userId: string): Pr
     body: acceptanceBody,
     meta: { projectId, inviteeId, invitationId },
   });
-  notificationsService.createNotification({
+  notifyUser({
     userId: inviterId,
-    type: 'invitation_accepted',
+    eventKey: 'project_invitation_accepted',
     title: acceptanceTitle,
     body: acceptanceBody,
     link: `${env.appUrl}/projects/${projectId}/settings`,
@@ -331,9 +342,9 @@ export async function acceptInvitation(invitationId: string, userId: string): Pr
         body: superAdminBody,
         meta: { projectId, inviteeId, invitationId },
       });
-      notificationsService.createNotification({
+      notifyUser({
         userId: toUserId,
-        type: 'invitation_accepted',
+        eventKey: 'project_invitation_accepted',
         title: acceptanceTitle,
         body: superAdminBody,
         link: `${env.appUrl}/projects/${projectId}/settings`,
@@ -352,4 +363,29 @@ export async function declineInvitation(invitationId: string, userId: string): P
   const inviteeId = (invitation.user as { _id?: unknown })._id?.toString?.() ?? String(invitation.user);
   if (inviteeId !== userId) throw new ApiError(403, 'You can only decline invitations sent to you.');
   await ProjectInvitation.findByIdAndUpdate(invitationId, { $set: { status: 'declined' } });
+}
+
+export async function ensureUserIsDefaultProjectMember(projectId: string, userId: string): Promise<void> {
+  const defaultDesignation = await ProjectDesignation.findOne({ projectId, code: 'project_member' }).lean();
+
+  const userObjectId = mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : userId;
+  const projectObjectId = mongoose.Types.ObjectId.isValid(projectId)
+    ? new mongoose.Types.ObjectId(projectId)
+    : projectId;
+
+  const existing = await ProjectMember.findOne({ project: projectObjectId, user: userObjectId }).lean();
+  if (existing) {
+    return;
+  }
+
+  const memberPerms = defaultDesignation?.permissions || DEFAULT_MEMBER_PERMS_DOT;
+
+  await ProjectInvitation.deleteMany({ project: projectObjectId, user: userObjectId });
+
+  await ProjectMember.create({
+    project: projectObjectId,
+    user: userObjectId,
+    designationId: defaultDesignation?._id,
+    permissions: memberPerms,
+  });
 }

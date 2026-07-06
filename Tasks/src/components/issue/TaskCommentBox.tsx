@@ -8,13 +8,18 @@ import Mention from '@tiptap/extension-mention';
 import { baseEditorExtensions, editorContentClass } from '../richText/richTextEditorExtensions';
 import { VideoBlock, AttachmentBlock } from '../richText/richTextCustomNodes';
 import RichTextToolbar from '../richText/RichTextToolbar';
-import { isEditorHtmlEmpty } from '../../lib/richTextStorage';
+import { contentToEditorHtml, isEditorHtmlEmpty } from '../../lib/richTextStorage';
 
 interface TaskCommentBoxProps {
   onSubmit: (body: string) => void;
   submitting: boolean;
   placeholder?: string;
   mentionUsers?: Array<{ _id: string; name: string; email: string }>;
+  /** Pre-fill editor (e.g. when editing an existing comment). */
+  initialBody?: string;
+  submitLabel?: string;
+  /** When set, Cancel calls this instead of clearing the new-comment draft. */
+  onCancel?: () => void;
 }
 
 
@@ -68,12 +73,13 @@ export default function TaskCommentBox({
   submitting,
   placeholder = 'Add a comment…',
   mentionUsers = [],
+  initialBody,
+  submitLabel = 'Comment',
+  onCancel,
 }: TaskCommentBoxProps) {
   const { token } = useAuth();
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
-  const [draftSnapshot, setDraftSnapshot] = useState('');
   const mentionUsersRef = useRef<Array<{ _id: string; name: string; email: string }>>([]);
   useEffect(() => {
     mentionUsersRef.current = mentionUsers;
@@ -245,8 +251,13 @@ export default function TaskCommentBox({
         },
       },
     },
-    []
+    [placeholder]
   );
+
+  useEffect(() => {
+    if (!editor || initialBody === undefined) return;
+    editor.commands.setContent(contentToEditorHtml(initialBody), false);
+  }, [editor, initialBody]);
 
   const handleImageUpload = () => {
     const input = document.createElement('input');
@@ -334,43 +345,22 @@ export default function TaskCommentBox({
     const html = editor?.getHTML() ?? '';
     if (isEditorHtmlEmpty(html) || submitting) return;
     onSubmit(html);
-    editor?.commands.clearContent(true);
-    setExpanded(false);
-    setDraftSnapshot('');
+    if (!onCancel) {
+      editor?.commands.clearContent(true);
+    }
   };
 
   const mediaBtn =
     'w-8 h-8 rounded text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)] hover:bg-[color:var(--bg-page)] focus:outline-none focus:ring-1 focus:ring-[color:var(--accent)]/40 flex items-center justify-center';
 
   const handleCancel = () => {
-    if (!editor) return;
-    editor.commands.setContent(draftSnapshot || '', false);
-    setExpanded(false);
-  };
-
-  const handleExpand = () => {
-    if (!editor) return;
     setUploadError(null);
-    setDraftSnapshot(editor.getHTML());
-    setExpanded(true);
-    requestAnimationFrame(() => {
-      editor.chain().focus('end').run();
-    });
+    if (onCancel) {
+      onCancel();
+      return;
+    }
+    editor?.commands.clearContent(true);
   };
-
-  if (!expanded) {
-    return (
-      <div className="rounded-xl bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] p-3">
-        <button
-          type="button"
-          onClick={handleExpand}
-          className="w-full text-left px-3 py-2.5 rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--bg-page)] text-sm text-[color:var(--text-muted)] hover:border-[color:var(--accent)]/50 transition-colors"
-        >
-          {placeholder}
-        </button>
-      </div>
-    );
-  }
 
   return (
     <form onSubmit={handleSubmit} className="rounded-xl bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] overflow-hidden">
@@ -504,7 +494,11 @@ export default function TaskCommentBox({
           disabled={submitting || uploading || !editor || isEditorHtmlEmpty(editor.getHTML())}
           className="px-3 py-1.5 rounded-md bg-[color:var(--accent)] text-xs text-white hover:opacity-95 disabled:opacity-60 disabled:bg-[color:var(--bg-elevated)] disabled:text-[color:var(--text-muted)] disabled:cursor-not-allowed transition-colors"
         >
-          {submitting || uploading ? 'Sending…' : 'Comment'}
+          {submitting || uploading
+            ? submitLabel === 'Comment'
+              ? 'Sending…'
+              : 'Saving…'
+            : submitLabel}
         </button>
       </div>
     </form>

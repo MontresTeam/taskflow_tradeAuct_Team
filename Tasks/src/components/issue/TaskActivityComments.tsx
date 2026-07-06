@@ -10,7 +10,9 @@ interface TaskActivityCommentsProps {
   issue: Issue;
   comments: Comment[];
   onAddComment: (body: string) => void;
+  onUpdateComment?: (commentId: string, body: string) => void | Promise<void>;
   submittingComment: boolean;
+  editingCommentId?: string | null;
   mentionUsers?: Array<{ _id: string; name: string; email: string }>;
   workLogs: WorkLog[];
   currentUserId?: string;
@@ -25,7 +27,9 @@ export default function TaskActivityComments({
   issue,
   comments,
   onAddComment,
+  onUpdateComment,
   submittingComment,
+  editingCommentId,
   mentionUsers,
   workLogs,
   currentUserId,
@@ -35,45 +39,37 @@ export default function TaskActivityComments({
 }: TaskActivityCommentsProps) {
   const [activeTab, setActiveTab] = useState<Tab>('comments');
 
+  const tabClass = (tab: Tab) =>
+    `inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
+      activeTab === tab
+        ? 'bg-[color:var(--accent)] text-white font-semibold shadow-sm'
+        : 'text-[color:var(--text-muted)] hover:bg-[color:var(--bg-page)] hover:text-[color:var(--text-primary)]'
+    }`;
+
+  const badgeClass = (active: boolean) =>
+    `min-w-[1.1rem] h-[1.1rem] px-1 inline-flex items-center justify-center rounded-full text-[9px] font-bold ${
+      active ? 'bg-white/25 text-white' : 'bg-[color:var(--bg-elevated)] text-[color:var(--text-muted)]'
+    }`;
+
   return (
     <section className="rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] card-shadow overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-[color:var(--border-subtle)] bg-[color:var(--bg-elevated)]">
-        <span className="text-[11px] font-bold uppercase tracking-wider text-[color:var(--text-muted)] shrink-0">
-          Activity
-        </span>
+      <div className="flex items-center justify-between px-3 py-2.5 border-b border-[color:var(--border-subtle)] bg-[color:var(--bg-elevated)]">
+        <span className="type-label-caps shrink-0">Activity</span>
         <div className="flex gap-1">
-          <button
-            type="button"
-            onClick={() => setActiveTab('comments')}
-            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-              activeTab === 'comments'
-                ? 'bg-[color:var(--bg-surface)] text-[color:var(--text-primary)] border border-[color:var(--border-subtle)] shadow-sm font-semibold'
-                : 'text-[color:var(--text-muted)] hover:bg-[color:var(--bg-page)]'
-            }`}
-          >
-            Comments ({comments.length})
+          <button type="button" onClick={() => setActiveTab('comments')} className={tabClass('comments')}>
+            Comments
+            {comments.length > 0 && (
+              <span className={badgeClass(activeTab === 'comments')}>{comments.length}</span>
+            )}
           </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('history')}
-            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-              activeTab === 'history'
-                ? 'bg-[color:var(--bg-surface)] text-[color:var(--text-primary)] border border-[color:var(--border-subtle)] shadow-sm font-semibold'
-                : 'text-[color:var(--text-muted)] hover:bg-[color:var(--bg-page)]'
-            }`}
-          >
+          <button type="button" onClick={() => setActiveTab('history')} className={tabClass('history')}>
             History
           </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('time')}
-            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-              activeTab === 'time'
-                ? 'bg-[color:var(--bg-surface)] text-[color:var(--text-primary)] border border-[color:var(--border-subtle)] shadow-sm font-semibold'
-                : 'text-[color:var(--text-muted)] hover:bg-[color:var(--bg-page)]'
-            }`}
-          >
+          <button type="button" onClick={() => setActiveTab('time')} className={tabClass('time')}>
             Time
+            {workLogs.length > 0 && (
+              <span className={badgeClass(activeTab === 'time')}>{workLogs.length}</span>
+            )}
           </button>
         </div>
       </div>
@@ -88,11 +84,17 @@ export default function TaskActivityComments({
           />
           <ul className="space-y-3 mt-4">
             {comments.length === 0 ? (
-              <li className="text-[color:var(--text-muted)] text-xs py-4 text-center italic">No comments yet.</li>
+              <li className="type-meta py-6 text-center italic">No comments yet.</li>
             ) : (
               comments.map((c) => (
                 <li key={c._id}>
-                  <TaskCommentItem comment={c} />
+                  <TaskCommentItem
+                    comment={c}
+                    currentUserId={currentUserId}
+                    mentionUsers={mentionUsers}
+                    onUpdate={onUpdateComment}
+                    submittingEdit={submittingComment && editingCommentId === c._id}
+                  />
                 </li>
               ))
             )}

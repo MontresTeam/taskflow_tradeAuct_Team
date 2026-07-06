@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import { WorkLog, type IWorkLog } from './workLog.model';
-import { ProjectMember } from '../projects/projectMember.model';
+import { getProjectObjectIdsInWorkspace } from '../projects/workspaceProjectAccess';
 import { Issue } from '../issues/issue.model';
 import { notifyProjectRefresh } from '../../websocket';
 
@@ -22,20 +22,91 @@ export async function create(
   authorId: string,
   minutesSpent: number,
   date: Date,
-  description?: string
+  description?: string,
+  options?: {
+    laneId?: string;
+    overrunReason?: string;
+    memberPermissions?: string[];
+    userGlobalPermissions?: string[];
+    activeOrganizationId?: string;
+  }
 ): Promise<unknown> {
+  const issue = await Issue.findById(issueId).select('project status').lean();
+  if (!issue?.project) {
+    const { ApiError } = await import('../../utils/ApiError');
+    throw new ApiError(404, 'Issue not found');
+  }
+  const projectId = String(issue.project);
+
+  const { evaluateForIssueAction } = await import('../projectRules/projectRules.service');
+  const { getIssueRulePayload, getLoggedMinutesForLane } = await import('../stageEstimates/stageEstimate.service');
+  const { Project } = await import('../projects/project.model');
+  const project = await Project.findById(projectId).lean();
+
+  const laneId = options?.laneId;
+  let exceedsApproved = false;
+  if (laneId && project) {
+    const payload = await getIssueRulePayload(issueId, project as Record<string, unknown>, laneId);
+    const approvedMinutes = (payload.approvedMinutes as number) ?? 0;
+    const logged = await getLoggedMinutesForLane(issueId, laneId);
+    exceedsApproved = approvedMinutes > 0 && logged + minutesSpent > approvedMinutes;
+  }
+
+  const { getProjectPermissionsForUser } = await import('../../middleware/requireProjectPermission');
+  const perms =
+    options?.memberPermissions ??
+    (await getProjectPermissionsForUser(
+      projectId,
+      authorId,
+      options?.userGlobalPermissions,
+      options?.activeOrganizationId
+    ));
+
+  const rulePayload = {
+    ...(await getIssueRulePayload(issueId, (project ?? {}) as Record<string, unknown>, laneId)),
+    exceedsApproved,
+    overrunReason: options?.overrunReason,
+  };
+
+  const result = await evaluateForIssueAction(projectId, {
+    issue: issue as Record<string, unknown>,
+    action: 'worklog.create',
+    userId: authorId,
+    memberPermissions: perms,
+    payload: rulePayload,
+  });
+  if (!result.allowed) {
+    const { ApiError } = await import('../../utils/ApiError');
+    throw new ApiError(403, result.violations[0]?.message ?? 'Work log blocked by project rules', {
+      ruleViolations: result.violations,
+    });
+  }
+
   const doc = await WorkLog.create({
     issue: issueId,
     author: authorId,
     minutesSpent,
     date,
     description,
+    laneId,
+    overrunReason: options?.overrunReason,
   });
   const populated = await WorkLog.findById(doc._id)
     .populate('author', 'name email')
     .lean();
-  const issue = await Issue.findById(issueId).select('project').lean();
   if (issue?.project) notifyProjectRefresh(String(issue.project));
+
+  if (exceedsApproved && options?.overrunReason) {
+    const issueHistoryService = await import('../issues/issueHistory.service');
+    await issueHistoryService.recordFieldChanges(issueId, authorId, [
+      {
+        field: 'worklogOverrun',
+        fromValue: laneId,
+        toValue: options.overrunReason,
+      },
+    ]);
+  }
+
   return populated ?? doc.toObject();
 }
 
@@ -209,15 +280,15 @@ export async function getProjectTimesheet(
 export async function getGlobalTimesheet(
   userId: string,
   start: Date,
-  end: Date
+  end: Date,
+  taskflowOrganizationId?: string | null
 ): Promise<TimesheetResult> {
   const startDay = new Date(start);
   startDay.setHours(0, 0, 0, 0);
   const endDay = new Date(end);
   endDay.setHours(23, 59, 59, 999);
 
-  const userObjectId = new mongoose.Types.ObjectId(userId);
-  const projectIds = await ProjectMember.find({ user: userObjectId }).distinct('project');
+  const projectIds = await getProjectObjectIdsInWorkspace(userId, taskflowOrganizationId);
   if (projectIds.length === 0) {
     return {
       byUser: [],
@@ -303,10 +374,10 @@ export interface TimesheetDetailItem {
 export async function getTimesheetDetails(
   requestingUserId: string,
   targetUserId: string,
-  dateStr: string
+  dateStr: string,
+  taskflowOrganizationId?: string | null
 ): Promise<TimesheetDetailItem[]> {
-  const userObjectId = new mongoose.Types.ObjectId(requestingUserId);
-  const projectIds = await ProjectMember.find({ user: userObjectId }).distinct('project');
+  const projectIds = await getProjectObjectIdsInWorkspace(requestingUserId, taskflowOrganizationId);
   if (projectIds.length === 0) return [];
 
   const targetDate = new Date(dateStr);
@@ -416,10 +487,10 @@ function formatMinutesForExport(minutes: number): string {
 export async function getTimesheetExportData(
   userId: string,
   start: Date,
-  end: Date
+  end: Date,
+  taskflowOrganizationId?: string | null
 ): Promise<TimesheetDetailItem[]> {
-  const userObjectId = new mongoose.Types.ObjectId(userId);
-  const projectIds = await ProjectMember.find({ user: userObjectId }).distinct('project');
+  const projectIds = await getProjectObjectIdsInWorkspace(userId, taskflowOrganizationId);
   if (projectIds.length === 0) return [];
 
   const startDay = new Date(start);

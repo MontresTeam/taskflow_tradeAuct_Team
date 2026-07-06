@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
 import { ApiError } from '../utils/ApiError';
+import { Project } from '../modules/projects/project.model';
 import { ProjectMember } from '../modules/projects/projectMember.model';
 import { ProjectDesignation } from '../modules/projects/projectDesignation.model';
 import { Role } from '../modules/roles/role.model';
@@ -32,7 +33,7 @@ const PROJECT_FULL_ACCESS = [
  *   - user holds all 4 explicit project CRUD perms (new dot-notation roles)
  *   - user holds project.project.create (legacy roles only mapped projects:create,
  *     never projects:read/update/delete, so the 4-CRUD check would always fail for them) */
-function hasProjectFullAccess(userPerms: string[]): boolean {
+export function hasProjectFullAccess(userPerms: string[]): boolean {
   if (userPerms.some((p) => p.endsWith('.*') && 'project.project.create'.startsWith(p.slice(0, -1)))) return true;
   if (PROJECT_FULL_ACCESS.every((p) => userPerms.includes(p))) return true;
   // Legacy role fallback: projects:create → project.project.create is the sole indicator of global project admin
@@ -57,11 +58,8 @@ export function requireProjectPermission(
       return;
     }
 
-    const userPerms = req.user.permissions ?? [];
-    if (hasProjectFullAccess(userPerms)) {
-      next();
-      return;
-    }
+    const authUser = req.user as any;
+    const userPerms = authUser.permissions ?? [];
 
     let projectId: string | undefined;
     for (const src of sources) {
@@ -80,9 +78,31 @@ export function requireProjectPermission(
       return;
     }
 
-    const userObjectId = mongoose.Types.ObjectId.isValid(req.user.id)
-      ? new mongoose.Types.ObjectId(req.user.id)
-      : req.user.id;
+    const proj = await Project.findById(projectId).select('taskflowOrganizationId').lean();
+    if (!proj) {
+      next(new ApiError(404, 'Project not found'));
+      return;
+    }
+    const projectTfOrg = (proj as { taskflowOrganizationId?: unknown }).taskflowOrganizationId;
+    const projectOrgStr = projectTfOrg ? String(projectTfOrg) : '';
+    const activeOrg = (req as Request & { activeOrganizationId?: string }).activeOrganizationId;
+    if (!projectOrgStr) {
+      next(new ApiError(403, 'Project is not linked to a workspace'));
+      return;
+    }
+    if (!activeOrg || projectOrgStr !== activeOrg) {
+      next(new ApiError(403, 'Project is not in the active workspace'));
+      return;
+    }
+
+    if (hasProjectFullAccess(userPerms)) {
+      next();
+      return;
+    }
+
+    const userObjectId = mongoose.Types.ObjectId.isValid(authUser.id)
+      ? new mongoose.Types.ObjectId(authUser.id)
+      : authUser.id;
     const member = await ProjectMember.findOne({ project: projectId, user: userObjectId }).lean();
 
     if (!member) {
@@ -90,15 +110,7 @@ export function requireProjectPermission(
       return;
     }
 
-    // Project Lead designation → full project access, override everything
-    if (member.designationId) {
-      const designation = await ProjectDesignation.findById(member.designationId).select('code').lean();
-      if (designation?.code === 'project_lead') {
-        (req as Request & { projectPermissions?: string[] }).projectPermissions = ALL_PROJECT_PERMISSIONS as unknown as string[];
-        next();
-        return;
-      }
-    }
+
 
     let permissions: string[] = Array.isArray(member.permissions) ? [...member.permissions] : [];
     if (permissions.length === 0 && member.role) {
@@ -122,7 +134,16 @@ export async function getProjectPermissionsForUser(
   projectId: string,
   userId: string,
   userPermissions?: string[],
+  activeOrganizationId?: string
 ): Promise<string[]> {
+  const proj = await Project.findById(projectId).select('taskflowOrganizationId').lean();
+  if (!proj) return [];
+  const pOrg = (proj as { taskflowOrganizationId?: unknown }).taskflowOrganizationId;
+  const projectOrgStr = pOrg ? String(pOrg) : '';
+  if (!projectOrgStr || (activeOrganizationId && projectOrgStr !== activeOrganizationId)) {
+    return [];
+  }
+
   // Global override: full project CRUD or wildcard permission grants all project-scoped permissions
   if (userPermissions && hasProjectFullAccess(userPermissions)) {
     return [...ALL_PROJECT_PERMISSIONS] as string[];
@@ -132,13 +153,7 @@ export async function getProjectPermissionsForUser(
   const member = await ProjectMember.findOne({ project: projectId, user: userObjectId }).lean();
   if (!member) return [];
 
-  // Project Lead → full project permissions
-  if (member.designationId) {
-    const designation = await ProjectDesignation.findById(member.designationId).select('code').lean();
-    if (designation?.code === 'project_lead') {
-      return [...ALL_PROJECT_PERMISSIONS] as string[];
-    }
-  }
+
 
   let permissions: string[] = Array.isArray(member.permissions) ? [...member.permissions] : [];
   if (permissions.length === 0 && member.role) {

@@ -9,6 +9,11 @@ import { ApiError } from '../../utils/ApiError';
 import type { ReportFilters } from '../reports/reportFilters';
 import { buildIssueMatch } from '../reports/reportFilters';
 import { getClosedStatusNamesForProject, getClosedStatusNamesFromStatuses } from '../projects/statusClassification';
+import { getProjectObjectIdsInWorkspace } from '../projects/workspaceProjectAccess';
+import type { HierarchyIssueRow } from '../issues/issueHierarchy.service';
+import { effectiveStoryPointsForIssue } from '../issues/issueHierarchy.service';
+
+export { getProjectObjectIdsInWorkspace } from '../projects/workspaceProjectAccess';
 
 export interface WorkloadEntry {
   userId: string;
@@ -23,8 +28,13 @@ export interface WorkloadStats {
   entries: WorkloadEntry[];
 }
 
-export async function getWorkloadStats(userId: string, projectId?: string, filters?: ReportFilters): Promise<WorkloadStats> {
-  const match = await buildIssueMatch(userId, projectId, filters ?? {});
+export async function getWorkloadStats(
+  userId: string,
+  projectId?: string,
+  filters?: ReportFilters,
+  taskflowOrganizationId?: string | null
+): Promise<WorkloadStats> {
+  const match = await buildIssueMatch(userId, projectId, filters ?? {}, taskflowOrganizationId);
   if (!match) return { entries: [] };
   const issues = await Issue.find(match).select('assignee status storyPoints project').lean();
   const projectIds = [...new Set(issues.map((i) => String(i.project)).filter(Boolean))];
@@ -35,13 +45,28 @@ export async function getWorkloadStats(userId: string, projectId?: string, filte
     projectDocs.map((p) => [String(p._id), new Set(getClosedStatusNamesFromStatuses((p as { statuses?: Array<{ name?: string; isClosed?: boolean }> }).statuses))])
   );
 
+  const hierarchyByProject = new Map<string, HierarchyIssueRow[]>();
+  for (const pid of projectIds) {
+    const rows = await Issue.find({ project: pid }).select('_id parent storyPoints status').lean();
+    hierarchyByProject.set(
+      pid,
+      rows.map((r) => ({
+        _id: r._id as mongoose.Types.ObjectId,
+        parent: r.parent as mongoose.Types.ObjectId | null | undefined,
+        storyPoints: r.storyPoints as number | null | undefined,
+        status: String(r.status ?? ''),
+      }))
+    );
+  }
+
   const aggMap = new Map<string, { _id: mongoose.Types.ObjectId | null; totalCount: number; openCount: number; doneCount: number; storyPoints: number }>();
   for (const issue of issues) {
     const assigneeId = (issue.assignee as mongoose.Types.ObjectId | null) ?? null;
     const key = assigneeId ? String(assigneeId) : '__unassigned__';
     const row = aggMap.get(key) ?? { _id: assigneeId, totalCount: 0, openCount: 0, doneCount: 0, storyPoints: 0 };
     row.totalCount += 1;
-    row.storyPoints += (issue.storyPoints ?? 0);
+    const projRows = hierarchyByProject.get(String(issue.project)) ?? [];
+    row.storyPoints += effectiveStoryPointsForIssue(String(issue._id), projRows);
     const closedSet = closedByProject.get(String(issue.project)) ?? new Set(['Done', 'Closed', 'Resolved']);
     if (closedSet.has(String(issue.status ?? ''))) row.doneCount += 1;
     else row.openCount += 1;
@@ -116,11 +141,15 @@ export interface EstimatesStats {
 
 export async function getProjectDeliveryEstimate(
   projectId: string,
-  userId: string
+  userId: string,
+  taskflowOrganizationId?: string | null
 ): Promise<ProjectDeliveryEstimate> {
   const userObjectId = new mongoose.Types.ObjectId(userId);
   const isMember = await ProjectMember.exists({ user: userObjectId, project: projectId });
-  if (!isMember) {
+  const inWorkspace = (await getProjectObjectIdsInWorkspace(userId, taskflowOrganizationId)).some(
+    (id) => String(id) === projectId
+  );
+  if (!isMember || !inWorkspace) {
     return {
       remainingEstimateMinutes: 0,
       loggedMinutesOnDone: 0,
@@ -197,16 +226,20 @@ export async function getProjectDeliveryEstimate(
   };
 }
 
-export async function getEstimatesStats(userId: string, projectId?: string): Promise<EstimatesStats> {
-  const userObjectId = new mongoose.Types.ObjectId(userId);
+export async function getEstimatesStats(
+  userId: string,
+  projectId?: string,
+  taskflowOrganizationId?: string | null
+): Promise<EstimatesStats> {
+  const scoped = await getProjectObjectIdsInWorkspace(userId, taskflowOrganizationId);
+  const scopedSet = new Set(scoped.map((id) => String(id)));
+
   let projectIds: mongoose.Types.ObjectId[];
   if (projectId) {
-    const isMember = await ProjectMember.exists({ user: userObjectId, project: projectId });
-    if (!isMember) return { totalMinutes: 0, byProject: [], byAssignee: [] };
+    if (!scopedSet.has(projectId)) return { totalMinutes: 0, byProject: [], byAssignee: [] };
     projectIds = [new mongoose.Types.ObjectId(projectId)];
   } else {
-    const ids = await ProjectMember.find({ user: userObjectId }).distinct('project');
-    projectIds = ids.map((id) => new mongoose.Types.ObjectId(id));
+    projectIds = scoped;
   }
   if (projectIds.length === 0) return { totalMinutes: 0, byProject: [], byAssignee: [] };
 
@@ -251,7 +284,7 @@ export async function getEstimatesStats(userId: string, projectId?: string): Pro
 
   if (projectId) {
     const [delivery, unestimatedCountResult] = await Promise.all([
-      getProjectDeliveryEstimate(projectId, userId),
+      getProjectDeliveryEstimate(projectId, userId, taskflowOrganizationId),
       Issue.aggregate<{ count: number }>([
         { $match: { project: new mongoose.Types.ObjectId(projectId) } },
         {
@@ -318,10 +351,17 @@ export interface ProjectMetricsResponse {
   totalEstimatedMinutes: number;
 }
 
-export async function getProjectMetrics(projectId: string, userId: string): Promise<ProjectMetricsResponse | null> {
+export async function getProjectMetrics(
+  projectId: string,
+  userId: string,
+  taskflowOrganizationId?: string | null
+): Promise<ProjectMetricsResponse | null> {
   const userObjectId = new mongoose.Types.ObjectId(userId);
   const isMember = await ProjectMember.exists({ user: userObjectId, project: projectId });
-  if (!isMember) return null;
+  const inWorkspace = (await getProjectObjectIdsInWorkspace(userId, taskflowOrganizationId)).some(
+    (id) => String(id) === projectId
+  );
+  if (!isMember || !inWorkspace) return null;
   const projectObjectId = new mongoose.Types.ObjectId(projectId);
 
   const { Project } = await import('../projects/project.model');
@@ -445,10 +485,14 @@ export interface DashboardStats {
   }>;
 }
 
-export async function getStatsForUser(userId: string): Promise<DashboardStats> {
-  const userObjectId = new mongoose.Types.ObjectId(userId);
-  const projectIds = await ProjectMember.find({ user: userObjectId }).distinct('project');
-  const projectObjectIds = projectIds.map((id) => new mongoose.Types.ObjectId(id));
+export async function getStatsForUser(
+  userId: string,
+  taskflowOrganizationId: string | null | undefined
+): Promise<DashboardStats> {
+  const projectObjectIds = await getProjectObjectIdsInWorkspace(userId, taskflowOrganizationId);
+  if (projectObjectIds.length === 0) {
+    return { totalIssues: 0, issuesByStatus: {}, recentIssues: [] };
+  }
 
   const [aggregationResult, recentList] = await Promise.all([
     Issue.aggregate<{ _id: string; count: number }>([
@@ -502,10 +546,11 @@ export interface PortfolioProjectEntry {
   progressPercent: number;
 }
 
-export async function getPortfolioStats(userId: string): Promise<PortfolioProjectEntry[]> {
-  const userObjectId = new mongoose.Types.ObjectId(userId);
-  const projectIds = await ProjectMember.find({ user: userObjectId }).distinct('project');
-  const projectObjectIds = projectIds.map((id) => new mongoose.Types.ObjectId(id));
+export async function getPortfolioStats(
+  userId: string,
+  taskflowOrganizationId: string | null | undefined
+): Promise<PortfolioProjectEntry[]> {
+  const projectObjectIds = await getProjectObjectIdsInWorkspace(userId, taskflowOrganizationId);
   if (projectObjectIds.length === 0) return [];
 
   const projectDocs = await Project.find({ _id: { $in: projectObjectIds } }).select('name key statuses').lean();
@@ -599,8 +644,13 @@ export interface DefectMetrics {
   defectDensity?: number;
 }
 
-export async function getDefectMetrics(userId: string, projectId?: string, filters?: ReportFilters): Promise<DefectMetrics> {
-  const match = await buildIssueMatch(userId, projectId, filters ?? {});
+export async function getDefectMetrics(
+  userId: string,
+  projectId?: string,
+  filters?: ReportFilters,
+  taskflowOrganizationId?: string | null
+): Promise<DefectMetrics> {
+  const match = await buildIssueMatch(userId, projectId, filters ?? {}, taskflowOrganizationId);
   if (!match) return { totalBugs: 0, openBugs: 0, closedBugs: 0, byStatus: {}, byPriority: {} };
 
   const allIssues = await Issue.find(match)
@@ -629,7 +679,24 @@ export async function getDefectMetrics(userId: string, projectId?: string, filte
   }
 
   let defectDensity: number | undefined;
-  const totalStoryPoints = allIssues.reduce((sum, i) => sum + ((i as { storyPoints?: number }).storyPoints ?? 0), 0);
+  const projectIdsForSp = [...new Set(allIssues.map((i) => String(i.project)).filter(Boolean))];
+  const hierarchyByProject = new Map<string, HierarchyIssueRow[]>();
+  for (const pid of projectIdsForSp) {
+    const rows = await Issue.find({ project: pid }).select('_id parent storyPoints status').lean();
+    hierarchyByProject.set(
+      pid,
+      rows.map((r) => ({
+        _id: r._id as mongoose.Types.ObjectId,
+        parent: r.parent as mongoose.Types.ObjectId | null | undefined,
+        storyPoints: r.storyPoints as number | null | undefined,
+        status: String(r.status ?? ''),
+      }))
+    );
+  }
+  const totalStoryPoints = allIssues.reduce((sum, i) => {
+    const projRows = hierarchyByProject.get(String(i.project)) ?? [];
+    return sum + effectiveStoryPointsForIssue(String(i._id), projRows);
+  }, 0);
   if (totalStoryPoints > 0 && bugs.length > 0) {
     defectDensity = Math.round((bugs.length / totalStoryPoints) * 100) / 100;
   }
@@ -661,17 +728,18 @@ export async function getCostUsageReport(
   userId: string,
   projectId: string | undefined,
   from: Date,
-  to: Date
+  to: Date,
+  taskflowOrganizationId?: string | null
 ): Promise<CostUsageReport> {
-  const userObjectId = new mongoose.Types.ObjectId(userId);
+  const scoped = await getProjectObjectIdsInWorkspace(userId, taskflowOrganizationId);
+  const scopedSet = new Set(scoped.map((id) => String(id)));
+
   let projectIds: mongoose.Types.ObjectId[];
   if (projectId) {
-    const isMember = await ProjectMember.exists({ user: userObjectId, project: projectId });
-    if (!isMember) return { entries: [] };
+    if (!scopedSet.has(projectId)) return { entries: [] };
     projectIds = [new mongoose.Types.ObjectId(projectId)];
   } else {
-    const ids = await ProjectMember.find({ user: userObjectId }).distinct('project');
-    projectIds = ids.map((id) => new mongoose.Types.ObjectId(id));
+    projectIds = scoped;
   }
   if (projectIds.length === 0) return { entries: [] };
 
@@ -774,9 +842,11 @@ function normalizeDayRange(from: Date, to: Date): { startDay: Date; endDay: Date
 }
 
 /** Users who share at least one project with the requester (for picker + validation). */
-export async function getPerformanceReportTeammates(requestingUserId: string): Promise<PerformanceReportTeammate[]> {
-  const userObjectId = new mongoose.Types.ObjectId(requestingUserId);
-  const projectIds = await ProjectMember.find({ user: userObjectId }).distinct('project');
+export async function getPerformanceReportTeammates(
+  requestingUserId: string,
+  taskflowOrganizationId?: string | null
+): Promise<PerformanceReportTeammate[]> {
+  const projectIds = await getProjectObjectIdsInWorkspace(requestingUserId, taskflowOrganizationId);
   if (projectIds.length === 0) return [];
 
   const memberUserIds = await ProjectMember.distinct('user', { project: { $in: projectIds } });
@@ -797,7 +867,8 @@ export async function getPerformanceReport(
   targetUserIds: string[],
   from: Date,
   to: Date,
-  filterProjectIds?: string[] | null
+  filterProjectIds?: string[] | null,
+  taskflowOrganizationId?: string | null
 ): Promise<PerformanceReportResult> {
   const empty: PerformanceReportResult = {
     rows: [],
@@ -805,11 +876,10 @@ export async function getPerformanceReport(
     chartByMember: [],
   };
 
-  const userObjectId = new mongoose.Types.ObjectId(requestingUserId);
-  const memberProjectIds = await ProjectMember.find({ user: userObjectId }).distinct('project');
-  if (memberProjectIds.length === 0) return empty;
+  const workspaceProjectIds = await getProjectObjectIdsInWorkspace(requestingUserId, taskflowOrganizationId);
+  if (workspaceProjectIds.length === 0) return empty;
 
-  const allowedProjectIdSet = new Set(memberProjectIds.map((id) => String(id)));
+  const allowedProjectIdSet = new Set(workspaceProjectIds.map((id) => String(id)));
   let projectObjectIds: mongoose.Types.ObjectId[];
   if (filterProjectIds && filterProjectIds.length > 0) {
     for (const pid of filterProjectIds) {
@@ -822,10 +892,10 @@ export async function getPerformanceReport(
     }
     projectObjectIds = filterProjectIds.map((id) => new mongoose.Types.ObjectId(id));
   } else {
-    projectObjectIds = memberProjectIds.map((id) => new mongoose.Types.ObjectId(id));
+    projectObjectIds = workspaceProjectIds;
   }
 
-  const memberUserIds = await ProjectMember.distinct('user', { project: { $in: memberProjectIds } });
+  const memberUserIds = await ProjectMember.distinct('user', { project: { $in: workspaceProjectIds } });
   const allowedUserIds = new Set(memberUserIds.map((id) => String(id)));
 
   const uniqueTargets = [...new Set(targetUserIds.map((id) => id.trim()).filter(Boolean))];

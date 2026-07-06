@@ -1,10 +1,24 @@
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 export const WS_URL = import.meta.env.VITE_WS_URL || 'http://localhost:5000';
 
+/** Persisted active TaskFlow workspace; sent as `X-Organization-Id` on API requests. */
+export const TASKFLOW_ACTIVE_ORG_STORAGE_KEY = 'taskflow_active_organization_id';
+
+function taskflowOrgHeaders(): Record<string, string> {
+  try {
+    const id = localStorage.getItem(TASKFLOW_ACTIVE_ORG_STORAGE_KEY);
+    if (id?.trim()) return { 'X-Organization-Id': id.trim() };
+  } catch {
+    /* ignore */
+  }
+  return {};
+}
+
 export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
   message?: string;
+  status?: number;
 }
 
 async function request<T>(
@@ -14,6 +28,7 @@ async function request<T>(
   const { token, ...init } = options;
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
+    ...taskflowOrgHeaders(),
     ...(init.headers as Record<string, string>),
   };
   if (token) {
@@ -27,9 +42,12 @@ async function request<T>(
     if (res.status === 401) {
       window.dispatchEvent(new CustomEvent('auth:unauthorized'));
     }
+    const errJson = json as ApiResponse<T>;
     return {
       success: false,
-      message: (json as ApiResponse).message || res.statusText || 'Request failed',
+      status: res.status,
+      message: errJson.message || res.statusText || 'Request failed',
+      data: errJson.data,
     };
   }
   return json as ApiResponse<T>;
@@ -59,7 +77,9 @@ export async function uploadFile(file: File, token?: string): Promise<ApiRespons
   const formData = new FormData();
   formData.append('file', file);
 
-  const headers: HeadersInit = {};
+  const headers: HeadersInit = {
+    ...taskflowOrgHeaders(),
+  };
   if (token) {
     (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
   }
@@ -83,6 +103,14 @@ export async function uploadFile(file: File, token?: string): Promise<ApiRespons
 }
 
 /* Auth */
+export interface TaskflowOrganizationSummary {
+  id: string;
+  name: string;
+  slug: string;
+  role: string;
+  status?: string;
+}
+
 export interface AuthUser {
   id: string;
   email: string;
@@ -96,6 +124,9 @@ export interface AuthUser {
   permissions?: string[];
   mustChangePassword?: boolean;
   createdAt?: string;
+  /** Active TaskFlow workspace (JWT + UI). */
+  activeOrganizationId?: string;
+  organizations?: TaskflowOrganizationSummary[];
   // Customer fields
   orgId?: string;
   isOrgAdmin?: boolean;
@@ -107,7 +138,16 @@ export interface AuthData {
   tokens: { accessToken: string; refreshToken: string; expiresIn: string };
 }
 
+export interface PublicAuthConfig {
+  signupEnabled: boolean;
+  emailPasswordEnabled: boolean;
+  providers: { google: boolean; microsoft: boolean };
+}
+
 export const authApi = {
+  publicConfig: () => api.get<PublicAuthConfig>('/auth/public-config'),
+  register: (name: string, email: string, password: string) =>
+    api.post<AuthData>('/auth/register', { name, email, password }),
   login: (email: string, password: string) =>
     api.post<AuthData>('/auth/login', { email, password }),
 
@@ -140,6 +180,48 @@ export const authApi = {
     api.post<AuthData>('/auth/reset-password', { token, newPassword }),
 };
 
+export interface TaskflowOrganizationDetail {
+  organization: {
+    _id: string;
+    id?: string;
+    name: string;
+    slug: string;
+    description?: string;
+    status?: string;
+    createdAt?: string;
+  };
+  members: Array<{
+    _id: string;
+    role: string;
+    status: string;
+    user?: { _id: string; name: string; email: string };
+  }>;
+}
+
+export const organizationsApi = {
+  list: (token: string) =>
+    api.get<{ organizations: TaskflowOrganizationSummary[] }>('/organizations', token),
+  create: (body: { name: string; description?: string }, token: string) =>
+    api.post<{ organization: unknown }>('/organizations', body, token),
+  get: (id: string, token: string) =>
+    api.get<TaskflowOrganizationDetail>(`/organizations/${id}`, token),
+  switch: (id: string, token: string) =>
+    api.post<AuthData>(`/organizations/${id}/switch`, {}, token),
+  listMembers: (id: string, token: string) =>
+    api.get<{ members: TaskflowOrganizationDetail['members'] }>(`/organizations/${id}/members`, token),
+  inviteMember: (id: string, body: { email: string; role?: 'org_admin' | 'org_member' }, token: string) =>
+    api.post<{ member: unknown }>(`/organizations/${id}/members`, body, token),
+  updateMemberRole: (orgId: string, userId: string, body: { role: 'org_admin' | 'org_member' }, token: string) =>
+    api.patch<{ member: unknown }>(`/organizations/${orgId}/members/${userId}`, body, token),
+  update: (
+    id: string,
+    body: { name?: string; description?: string; status?: 'active' | 'archived' },
+    token: string
+  ) => api.patch<{ organization: unknown }>(`/organizations/${id}`, body, token),
+  removeMember: (orgId: string, userId: string, token: string) =>
+    api.delete<{ removed: boolean }>(`/organizations/${orgId}/members/${userId}`, token),
+};
+
 /* Projects */
 export interface ProjectStatus {
   id: string;
@@ -148,6 +230,57 @@ export interface ProjectStatus {
   isClosed?: boolean;
   icon?: string;
   color?: string;
+  fontColor?: string;
+  /** Work lane id when status represents in-progress work (dev, qa, etc.) */
+  userInLane?: string;
+}
+
+export type ProjectRuleTrigger =
+  | 'issue.created'
+  | 'issue.updated'
+  | 'estimate.submitted'
+  | 'worklog.creating'
+  | 'comment.creating';
+
+export interface ProjectRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  order: number;
+  mode: 'log' | 'enforce';
+  trigger: ProjectRuleTrigger;
+  conditions: Array<{ field: string; op: string; value?: unknown }>;
+  actions: Array<Record<string, unknown>>;
+}
+
+export interface StageEstimate {
+  _id: string;
+  issue: string;
+  project: string;
+  laneId: string;
+  statusId?: string;
+  assigneeId?: { _id: string; name: string; email?: string } | string;
+  minutes: number;
+  state: 'pending' | 'approved' | 'rejected';
+  submittedBy?: { _id: string; name: string; email?: string };
+  reviewedBy?: { _id: string; name: string; email?: string };
+  reviewedAt?: string;
+  rejectNote?: string;
+  forceApproveNote?: string;
+  createdAt?: string;
+}
+
+export interface EstimateSummary {
+  issueId: string;
+  byLane: Record<string, { pending: number; approved: number; rejected: number; entries: StageEstimate[] }>;
+  rollup: {
+    byLane: Record<string, number>;
+    totalApprovedMinutes: number;
+    totalPendingMinutes: number;
+    fromChildren: boolean;
+    leafCount: number;
+  };
+  hasPending: boolean;
 }
 
 export interface ProjectIssueType {
@@ -156,6 +289,7 @@ export interface ProjectIssueType {
   order: number;
   icon?: string;
   color?: string;
+  fontColor?: string;
 }
 
 export interface ProjectPriority {
@@ -164,9 +298,10 @@ export interface ProjectPriority {
   order: number;
   icon?: string;
   color?: string;
+  fontColor?: string;
 }
 
-export type CustomFieldType = 'text' | 'number' | 'date' | 'select' | 'multiselect' | 'user';
+export type CustomFieldType = 'text' | 'number' | 'date' | 'select' | 'multiselect' | 'user' | 'formula';
 
 export interface ProjectCustomField {
   id: string;
@@ -176,6 +311,25 @@ export interface ProjectCustomField {
   required: boolean;
   options?: string[];
   order: number;
+  formula?: string;
+}
+
+export interface FieldSchemeRule {
+  fieldKey: string;
+  visible: boolean;
+  required?: boolean;
+}
+
+export interface FieldScheme {
+  issueTypeId: string;
+  rules: FieldSchemeRule[];
+}
+
+export interface ResolvedCustomField extends ProjectCustomField {
+  visible: boolean;
+  effectiveRequired: boolean;
+  readOnly: boolean;
+  computedValue?: number | null;
 }
 
 export type ProjectVersionStatus = 'unreleased' | 'released' | 'archived';
@@ -219,9 +373,13 @@ export interface Project {
   issueTypes?: ProjectIssueType[];
   priorities?: ProjectPriority[];
   customFields?: ProjectCustomField[];
+  fieldSchemes?: FieldScheme[];
   versions?: ProjectVersion[];
   environments?: ProjectEnvironment[];
   releaseRules?: ProjectReleaseRule[];
+  estimateApprovalEnabled?: boolean;
+  rulesEnforcementMode?: 'log' | 'enforce';
+  projectRules?: ProjectRule[];
   createdAt?: string;
   /** Set on list response: user has project:edit in this project */
   canEdit?: boolean;
@@ -268,9 +426,24 @@ export interface ProjectTemplate {
   _id: string;
   name: string;
   description?: string;
-  statuses?: Array<{ id: string; name: string; order: number }>;
-  issueTypes?: Array<{ id: string; name: string; order: number }>;
-  priorities?: Array<{ id: string; name: string; order: number }>;
+  statuses?: Array<{ id: string; name: string; order: number; isClosed?: boolean; icon?: string; color?: string; fontColor?: string; userInLane?: string }>;
+  issueTypes?: Array<{ id: string; name: string; order: number; icon?: string; color?: string; fontColor?: string }>;
+  priorities?: Array<{ id: string; name: string; order: number; icon?: string; color?: string; fontColor?: string }>;
+  customFields?: ProjectCustomField[];
+  fieldSchemes?: FieldScheme[];
+  projectRules?: ProjectRule[];
+  estimateApprovalEnabled?: boolean;
+  rulesEnforcementMode?: 'log' | 'enforce';
+  isLibrary?: boolean;
+  currentVersion?: number;
+}
+
+export interface ProjectTemplateVersion {
+  _id: string;
+  templateId: string;
+  version: number;
+  changelog?: string;
+  createdAt: string;
 }
 
 /* In-app notifications */
@@ -290,20 +463,52 @@ export interface InAppNotification {
   createdAt: string;
 }
 
+export type NotificationMethod =
+  | 'in_app'
+  | 'push'
+  | 'email'
+  | 'sms'
+  | 'whatsapp'
+  | 'discord'
+  | 'slack'
+  | 'teams'
+  | 'telegram';
+export type NotificationMethodAvailability = Record<NotificationMethod, { enabled: boolean; reason?: string }>;
+export type NotificationPreferenceRow = {
+  eventKey: string;
+  methods: Record<NotificationMethod, boolean>;
+};
+export type NotificationEventDescriptor = { key: string; label: string; description: string };
+
 export const notificationsApi = {
   list: (params: { page?: number; limit?: number; unreadOnly?: boolean }, token: string) => {
     const q = new URLSearchParams();
     if (params.page) q.set('page', String(params.page));
     if (params.limit) q.set('limit', String(params.limit));
     if (params.unreadOnly) q.set('unreadOnly', 'true');
-    return api.get<Paginated<InAppNotification>>(`/inbox/notifications?${q.toString()}`, token);
+    return api.get<Paginated<InAppNotification>>(`/notifications?${q.toString()}`, token);
   },
   unreadCount: (token: string) =>
-    api.get<{ unread: number }>(`/inbox/notifications/unread-count`, token),
+    api.get<{ unread: number }>(`/notifications/unread-count`, token),
   markRead: (id: string, token: string) =>
-    api.patch<InAppNotification>(`/inbox/notifications/${id}/read`, {}, token),
+    api.patch<InAppNotification>(`/notifications/${id}/read`, {}, token),
   markAllRead: (token: string) =>
-    api.patch<{ updated: number }>(`/inbox/notifications/read-all`, {}, token),
+    api.patch<{ updated: number }>(`/notifications/read-all`, {}, token),
+  getPreferences: (token: string) =>
+    api.get<{
+      availableMethods: NotificationMethodAvailability;
+      events: NotificationEventDescriptor[];
+      matrix: NotificationPreferenceRow[];
+    }>(`/notifications/preferences`, token),
+  updatePreferences: (
+    matrix: Array<{ eventKey: string; methods: Partial<Record<NotificationMethod, boolean>> }>,
+    token: string
+  ) =>
+    api.put<{
+      availableMethods: NotificationMethodAvailability;
+      events: NotificationEventDescriptor[];
+      matrix: NotificationPreferenceRow[];
+    }>(`/notifications/preferences`, { matrix }, token),
 };
 
 export const projectsApi = {
@@ -327,9 +532,13 @@ export const projectsApi = {
       issueTypes: ProjectIssueType[];
       priorities: ProjectPriority[];
       customFields: ProjectCustomField[];
+      fieldSchemes: FieldScheme[];
       versions: ProjectVersion[];
       environments: ProjectEnvironment[];
       releaseRules: ProjectReleaseRule[];
+      projectRules: ProjectRule[];
+      estimateApprovalEnabled: boolean;
+      rulesEnforcementMode: 'log' | 'enforce';
     }>,
     token: string
   ) => api.patch<Project>(`/projects/${id}`, body, token),
@@ -364,11 +573,80 @@ export const projectsApi = {
     api.patch<ProjectDesignation>(`/projects/${projectId}/designations/${id}`, body, token),
   deleteDesignation: (projectId: string, id: string, token: string) =>
     api.delete(`/projects/${projectId}/designations/${id}`, token),
+
+  getTimeline: (projectId: string, token: string) =>
+    api.get<ProjectTimeline>(`/projects/${projectId}/timeline`, token),
+
+  snapshotTimelineBaseline: (projectId: string, token: string) =>
+    api.post<{ updated: number }>(`/projects/${projectId}/timeline/baseline`, {}, token),
+
+  getLinkGraph: (
+    projectId: string,
+    token: string,
+    params?: { linkTypes?: string; centerIssueId?: string; depth?: number; includeParentEdges?: boolean }
+  ) => {
+    const q = new URLSearchParams();
+    if (params?.linkTypes) q.set('linkTypes', params.linkTypes);
+    if (params?.centerIssueId) q.set('centerIssueId', params.centerIssueId);
+    if (params?.depth != null) q.set('depth', String(params.depth));
+    if (params?.includeParentEdges === false) q.set('includeParentEdges', 'false');
+    const qs = q.toString();
+    return api.get<IssueGraphData>(`/projects/${projectId}/link-graph${qs ? `?${qs}` : ''}`, token);
+  },
+
+  startImport: (
+    projectId: string,
+    body: {
+      source: 'ado' | 'csv' | 'jira';
+      reporterEmail: string;
+      dryRun?: boolean;
+      skipExisting?: boolean;
+      csvContent?: string;
+      options?: Record<string, unknown>;
+    },
+    token: string
+  ) =>
+    api.post<{ jobId?: string; status?: string; dryRun?: boolean; preview?: unknown }>(
+      `/projects/${projectId}/imports`,
+      body,
+      token
+    ),
+
+  getImportJob: (projectId: string, jobId: string, token: string) =>
+    api.get<ImportJobStatus>(`/projects/${projectId}/imports/${jobId}`, token),
+
+  getResolvedCustomFields: (projectId: string, issueType: string, token: string) =>
+    api.get<ResolvedCustomField[]>(
+      `/projects/${projectId}/resolved-fields?issueType=${encodeURIComponent(issueType)}`,
+      token
+    ),
+
+  getEstimateApprovals: (projectId: string, token: string) =>
+    api.get<StageEstimate[]>(`/projects/${projectId}/estimate-approvals`, token),
+
+  enableEstimateApproval: (projectId: string, token: string) =>
+    api.post<Project>(`/projects/${projectId}/enable-estimate-approval`, {}, token),
+
+  dryRunRules: (
+    projectId: string,
+    body: {
+      issue: Record<string, unknown>;
+      action: string;
+      payload?: Record<string, unknown>;
+      oldIssue?: Record<string, unknown>;
+    },
+    token: string
+  ) => api.post<unknown>(`/projects/${projectId}/rules/dry-run`, body, token),
 };
 
 export const projectTemplatesApi = {
   list: (token: string) => api.get<ProjectTemplate[]>('/project-templates', token),
+  listLibrary: (token: string) => api.get<ProjectTemplate[]>('/project-templates/library', token),
   get: (id: string, token: string) => api.get<ProjectTemplate>(`/project-templates/${id}`, token),
+  listVersions: (id: string, token: string) =>
+    api.get<ProjectTemplateVersion[]>(`/project-templates/${id}/versions`, token),
+  restoreVersion: (id: string, version: number, token: string) =>
+    api.post<ProjectTemplate>(`/project-templates/${id}/restore`, { version }, token),
   patch: (
     id: string,
     body: Partial<{
@@ -377,6 +655,10 @@ export const projectTemplatesApi = {
       statuses: ProjectTemplate['statuses'];
       issueTypes: ProjectTemplate['issueTypes'];
       priorities: ProjectTemplate['priorities'];
+      customFields: ProjectCustomField[];
+      fieldSchemes: FieldScheme[];
+      isLibrary: boolean;
+      changelog: string;
     }>,
     token: string
   ) => api.patch<ProjectTemplate>(`/project-templates/${id}`, body, token),
@@ -387,8 +669,53 @@ export interface Milestone {
   _id: string;
   name: string;
   dueDate?: string;
+  baselineStartDate?: string;
+  baselineDueDate?: string;
   status: string;
   description?: string;
+}
+
+export interface ProjectTimeline {
+  range: { start: string; end: string };
+  issues: Array<{
+    id: string;
+    key: string;
+    title: string;
+    type: string;
+    status: string;
+    parentId?: string;
+    milestoneId?: string;
+    fixVersionIds: string[];
+    startDate?: string;
+    dueDate?: string;
+    baselineStartDate?: string;
+    baselineDueDate?: string;
+    progress: number;
+  }>;
+  milestones: Array<{
+    id: string;
+    name: string;
+    dueDate?: string;
+    baselineStartDate?: string;
+    baselineDueDate?: string;
+    status: string;
+  }>;
+  versions: Array<{ id: string; name: string; releaseDate?: string; order?: number }>;
+  dependencies: Array<{ from: string; to: string }>;
+  parentEdges: Array<{ parentId: string; childId: string }>;
+}
+
+export interface PortfolioTimelineLane {
+  projectId: string;
+  projectName: string;
+  projectKey: string;
+  startDate?: string;
+  endDate?: string;
+  milestoneCount: number;
+  nextMilestone?: { name: string; dueDate: string };
+  nextRelease?: { name: string; releaseDate: string };
+  epicCount: number;
+  datedIssueCount: number;
 }
 
 export const milestonesApi = {
@@ -704,6 +1031,8 @@ export const dashboardApi = {
   getStats: (token: string) => api.get<DashboardStats>('/dashboard/stats', token),
   getPortfolio: (token: string) =>
     api.get<Array<{ projectId: string; projectName: string; projectKey: string; totalIssues: number; doneCount: number; openCount: number; progressPercent: number }>>('/dashboard/portfolio', token),
+  getPortfolioTimeline: (token: string) =>
+    api.get<PortfolioTimelineLane[]>('/dashboard/portfolio/timeline', token),
   getExecutive: (token: string) =>
     api.get<DashboardStats & { totalProjects: number }>('/dashboard/executive', token),
   getDefectMetrics: (token: string, projectId?: string) =>
@@ -758,10 +1087,10 @@ export const dashboardApi = {
     q.set('to', params.to);
     if (params.userIds.length) q.set('userIds', params.userIds.join(','));
     if (params.projectIds?.length) q.set('projectIds', params.projectIds.join(','));
-    const headers: HeadersInit = {};
-    if (token) {
-      (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
-    }
+    const headers: HeadersInit = {
+      ...taskflowOrgHeaders(),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
     const res = await fetch(`${API_BASE}/dashboard/performance-report/export?${q}`, { method: 'GET', headers });
     if (!res.ok) {
       const json = await res.json().catch(() => ({}));
@@ -822,6 +1151,11 @@ export interface InviteUserBody {
   roleId: string;
 }
 
+/** Successful `/auth/users/invite` response includes `inviteKind` alongside `data`. */
+export type InviteUserApiResponse = ApiResponse<User> & {
+  inviteKind?: 'new_user' | 'workspace_join';
+};
+
 export interface UpdateUserBody {
   name?: string;
   roleId?: string | null;
@@ -835,7 +1169,7 @@ export const usersApi = {
   update: (id: string, body: UpdateUserBody, token: string) =>
     api.patch<User>(`/auth/users/${id}`, body, token),
   invite: (body: InviteUserBody, token: string) =>
-    api.post<User>('/auth/users/invite', body, token),
+    api.post<User>('/auth/users/invite', body, token) as Promise<InviteUserApiResponse>,
   updatePermissions: (id: string, overrides: { granted: string[]; revoked: string[] }, token: string) =>
     api.patch<User>(`/auth/users/${id}/permissions`, overrides, token),
 };
@@ -879,12 +1213,26 @@ export interface InboxMessage {
   body?: string;
   readAt?: string;
   createdAt: string;
-  meta?: { invitationId?: string; status?: string };
+  /** Present when the API returns full documents (e.g. lean with timestamps) */
+  updatedAt?: string;
+  meta?: {
+    invitationId?: string;
+    status?: string;
+    url?: string;
+    projectId?: string;
+    versionId?: string;
+    versionName?: string;
+    environmentId?: string;
+    environmentName?: string;
+    issueCount?: number;
+    permissions?: string[];
+  } & Record<string, unknown>;
 }
 
 export const inboxApi = {
   list: (page = 1, limit = 50, token: string) =>
     api.get<Paginated<InboxMessage>>(`/inbox?page=${page}&limit=${limit}`, token),
+  unreadCount: (token: string) => api.get<{ unread: number }>(`/inbox/unread-count`, token),
   markRead: (id: string, token: string) => api.patch<InboxMessage>(`/inbox/${id}/read`, {}, token),
 };
 
@@ -923,6 +1271,51 @@ export interface ChecklistItem {
   done: boolean;
 }
 
+export interface IssueRollup {
+  issueId: string;
+  issueKey: string;
+  totalStoryPoints: number;
+  completedStoryPoints: number;
+  percentDone: number;
+  childCount: number;
+  directChildCount: number;
+  statusBreakdown: Array<{ status: string; count: number; storyPoints: number }>;
+  burndown: Array<{ date: string; remainingStoryPoints: number; ideal: number }>;
+}
+
+export interface IssueGraphNode {
+  id: string;
+  key: string;
+  title: string;
+  type: string;
+  status: string;
+}
+
+export interface IssueGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  linkType: string;
+  synthetic?: boolean;
+}
+
+export interface IssueGraphData {
+  nodes: IssueGraphNode[];
+  edges: IssueGraphEdge[];
+}
+
+export interface ImportJobStatus {
+  jobId: string;
+  source?: string;
+  status: string;
+  dryRun?: boolean;
+  progress?: string;
+  result?: unknown;
+  error?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface Issue {
   _id: string;
   key?: string;
@@ -935,17 +1328,19 @@ export interface Issue {
   reporter?: { _id: string; name: string; email: string };
   project?: { _id: string; name: string; key: string };
   sprint?: { _id: string; name: string; status: string };
-  parent?: { _id: string; key: string; title: string };
+  parent?: { _id: string; key: string; title: string } | string;
   milestone?: { _id: string; name: string; dueDate?: string; status: string };
   boardColumn?: string;
   labels?: string[];
   dueDate?: string;
   startDate?: string;
+  baselineStartDate?: string;
+  baselineDueDate?: string;
   storyPoints?: number;
   timeEstimateMinutes?: number;
   checklist?: ChecklistItem[];
   customFieldValues?: Record<string, unknown>;
-  fixVersion?: string;
+  fixVersion?: string[];
   affectsVersions?: string[];
   createdAt?: string;
   updatedAt?: string;
@@ -964,6 +1359,17 @@ export const issuesApi = {
     const { token, ...p } = params;
     const q = new URLSearchParams(p as Record<string, string>).toString();
     return api.get<Paginated<Issue>>(`/issues?${q}`, token);
+  },
+  getQuickFilterCounts: (token: string, projectId?: string) => {
+    const q = projectId ? `?project=${projectId}` : '';
+    return api.get<{
+      my: number;
+      open: number;
+      all: number;
+      myOpenLabels: Array<{ label: string; count: number }>;
+      openLabels: Array<{ label: string; count: number }>;
+      allLabels: Array<{ label: string; count: number }>;
+    }>(`/issues/quick-filters/counts${q}`, token);
   },
   get: (id: string, token: string) => api.get<Issue>(`/issues/${id}`, token),
   getByKey: (projectId: string, key: string, token: string) =>
@@ -992,7 +1398,7 @@ export const issuesApi = {
       parent?: string;
       milestone?: string;
       customFieldValues?: Record<string, unknown>;
-      fixVersion?: string;
+      fixVersion?: string[];
       affectsVersions?: string[];
       labels?: string[];
     },
@@ -1011,11 +1417,16 @@ export const issuesApi = {
       milestone?: string | null;
       checklist?: ChecklistItem[];
       customFieldValues?: Record<string, unknown>;
-      fixVersion?: string | null;
+      fixVersion?: string[] | null;
       affectsVersions?: string[];
+      expectedUpdatedAt?: string;
+      baselineStartDate?: string | null;
+      baselineDueDate?: string | null;
     },
     token: string
   ) => api.patch<Issue>(`/issues/${id}`, body, token),
+  getRollup: (issueId: string, token: string) =>
+    api.get<IssueRollup>(`/issues/${issueId}/rollup`, token),
   delete: (id: string, token: string) => api.delete(`/issues/${id}`, token),
   getHistory: (issueId: string, page = 1, limit = 50, token: string) =>
     api.get<Paginated<IssueHistoryItem>>(
@@ -1042,7 +1453,22 @@ export const issuesApi = {
     ),
   bulkUpdate: (
     issueIds: string[],
-    updates: { status?: string; assignee?: string | null; sprint?: string | null; storyPoints?: number | null; labels?: string[]; type?: string; priority?: string; fixVersion?: string | null },
+    updates: {
+      status?: string;
+      assignee?: string | null;
+      sprint?: string | null;
+      storyPoints?: number | null;
+      labels?: string[];
+      type?: string;
+      priority?: string;
+      fixVersion?: string[] | null;
+      affectsVersions?: string[];
+      milestone?: string | null;
+      dueDate?: string | null;
+      startDate?: string | null;
+      timeEstimateMinutes?: number | null;
+      parent?: string | null;
+    },
     token: string
   ) => api.patch<{ updated: number; errors: string[] }>('/issues/bulk', { issueIds, updates }, token),
   bulkDelete: (issueIds: string[], token: string) =>
@@ -1065,10 +1491,10 @@ export const issuesApi = {
     token: string
   ): Promise<{ success: boolean; message?: string }> => {
     const q = new URLSearchParams(params).toString();
-    const headers: HeadersInit = {};
-    if (token) {
-      (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
-    }
+    const headers: HeadersInit = {
+      ...taskflowOrgHeaders(),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
     const res = await fetch(`${API_BASE}/issues/export?${q}`, { method: 'GET', headers });
     if (!res.ok) {
       const json = await res.json().catch(() => ({}));
@@ -1086,6 +1512,19 @@ export const issuesApi = {
     URL.revokeObjectURL(url);
     return { success: true };
   },
+  getStageEstimates: (issueId: string, token: string) =>
+    api.get<StageEstimate[]>(`/issues/${issueId}/stage-estimates`, token),
+  getEstimateSummary: (issueId: string, token: string) =>
+    api.get<EstimateSummary>(`/issues/${issueId}/estimate-summary`, token),
+  submitStageEstimates: (
+    issueId: string,
+    estimates: Array<{ laneId: string; minutes: number; statusId?: string; assigneeId?: string }>,
+    token: string
+  ) => api.put<StageEstimate[]>(`/issues/${issueId}/stage-estimates`, { estimates }, token),
+  approveStageEstimate: (issueId: string, estimateId: string, token: string, body?: { note?: string; force?: boolean }) =>
+    api.post<StageEstimate>(`/issues/${issueId}/stage-estimates/${estimateId}/approve`, body ?? {}, token),
+  rejectStageEstimate: (issueId: string, estimateId: string, rejectNote: string, token: string) =>
+    api.post<StageEstimate>(`/issues/${issueId}/stage-estimates/${estimateId}/reject`, { rejectNote }, token),
 };
 
 export type IssueLinkType = 'blocks' | 'is_blocked_by' | 'duplicates' | 'is_duplicated_by' | 'relates_to';
@@ -1119,6 +1558,7 @@ export interface Comment {
   issue: string;
   author: { _id: string; name: string; email: string };
   createdAt: string;
+  updatedAt?: string;
 }
 
 export const commentsApi = {
@@ -1164,6 +1604,8 @@ export interface WorkLog {
   minutesSpent: number;
   date: string;
   description?: string;
+  laneId?: string;
+  overrunReason?: string;
   createdAt: string;
 }
 
@@ -1188,7 +1630,7 @@ export const workLogsApi = {
     ),
   create: (
     issueId: string,
-    body: { minutesSpent: number; date: string; description?: string },
+    body: { minutesSpent: number; date: string; description?: string; laneId?: string; overrunReason?: string },
     token: string
   ) => api.post<WorkLog>(`/issues/${issueId}/work-logs`, body, token),
   update: (
@@ -1235,10 +1677,10 @@ export const timesheetApi = {
   /** Download detailed timesheet as Excel file. */
   downloadExcel: async (startDate: string, endDate: string, token: string): Promise<{ success: boolean; message?: string }> => {
     const q = new URLSearchParams({ startDate, endDate }).toString();
-    const headers: HeadersInit = {};
-    if (token) {
-      (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
-    }
+    const headers: HeadersInit = {
+      ...taskflowOrgHeaders(),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
     const res = await fetch(`${API_BASE}/timesheet/export?${q}`, { method: 'GET', headers });
     if (!res.ok) {
       const json = await res.json().catch(() => ({}));
@@ -1479,6 +1921,7 @@ export interface CustomerOrg {
   _id: string;
   name: string;
   slug: string;
+  taskflowOrganizationId?: string;
   contactEmail: string;
   contactPhone?: string;
   description?: string;
@@ -1604,4 +2047,19 @@ export const adminCustomerApi = {
     api.post(`/customer/requests/${id}/tf-approve`, { note }, token),
   rejectRequest: (id: string, reason: string, note: string | undefined, token: string) =>
     api.post(`/customer/requests/${id}/tf-reject`, { reason, note }, token),
+};
+
+export interface AdminIntegrationConfigItem {
+  id: string;
+  label: string;
+  enabled: boolean;
+  configured: boolean;
+  envKeys: string[];
+  missingKeys: string[];
+  notes?: string;
+}
+
+export const adminSystemApi = {
+  getIntegrationsConfig: (token: string) =>
+    api.get<{ items: AdminIntegrationConfigItem[]; sampleEnvKeys: string[] }>('/admin/integrations-config', token),
 };

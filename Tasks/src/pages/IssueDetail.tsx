@@ -1,6 +1,9 @@
-import { useEffect, useState, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useEffect, useState, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { FiAlertCircle } from 'react-icons/fi';
 import { useAuth } from '../contexts/AuthContext';
+import { useNotifications } from '../contexts/NotificationsContext';
 import {
   issuesApi,
   commentsApi,
@@ -17,8 +20,8 @@ import {
   getIssueKey,
 } from '../lib/api';
 import ConfirmModal from '../components/ConfirmModal';
+import { IssueCreateEditModal } from '../components/issues';
 import {
-  TaskBreadcrumb,
   TaskHeader,
   TaskDescription,
   TaskSecondaryTabs,
@@ -26,6 +29,8 @@ import {
   TaskDetailsSidebar,
   WorkLogInput,
 } from '../components/issue';
+import EpicRollupPanel from '../components/issue/EpicRollupPanel';
+import StageEstimatePanel from '../components/issue/StageEstimatePanel';
 import type { TaskSecondaryTabsHandle } from '../components/issue/TaskSecondaryTabs';
 
 const DEFAULT_STATUSES = ['Backlog', 'Todo', 'In Progress', 'Done'];
@@ -35,10 +40,13 @@ const DEFAULT_PRIORITIES = ['Lowest', 'Low', 'Medium', 'High', 'Highest'];
 export default function IssueDetail() {
   const { projectId, ticketId } = useParams<{ projectId?: string; ticketId: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { token, user } = useAuth();
+  const { showToast, subscribeProject } = useNotifications();
   const secondaryTabsRef = useRef<TaskSecondaryTabsHandle>(null);
   const [issue, setIssue] = useState<Issue | null>(null);
   const [project, setProject] = useState<Project | null>(null);
+  const [projectPermissions, setProjectPermissions] = useState<string[]>([]);
   const [comments, setComments] = useState<Comment[]>([]);
   const [workLogs, setWorkLogs] = useState<import('../lib/api').WorkLog[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -51,12 +59,134 @@ export default function IssueDetail() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [submittingComment, setSubmittingComment] = useState(false);
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [submittingWorkLog, setSubmittingWorkLog] = useState(false);
   const [updatingField, setUpdatingField] = useState<string | null>(null);
   const [newLabel, setNewLabel] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [timeLogOpen, setTimeLogOpen] = useState(false);
   const [sprints, setSprints] = useState<Sprint[]>([]);
+  const [conflictLatest, setConflictLatest] = useState<Issue | null>(null);
+  const [pendingUpdate, setPendingUpdate] = useState<Parameters<typeof issuesApi.update>[1] | null>(null);
+
+  const [modalOpen, setModalOpen] = useState<'create' | 'edit' | null>(null);
+  const [form, setForm] = useState({
+    title: '',
+    description: '',
+    type: 'Task',
+    priority: 'Medium',
+    status: 'Backlog',
+    project: projectId ?? '',
+    assignee: '',
+    sprint: '',
+    storyPoints: '',
+    parent: '',
+    milestone: '',
+    customFieldValues: {} as Record<string, unknown>,
+    fixVersion: [] as string[],
+    affectsVersions: [] as string[],
+    labels: [] as string[],
+  });
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [submittingModal, setSubmittingModal] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+
+  const PARAM_CREATE = 'create';
+  const PARAM_PARENT = 'parent';
+
+  useEffect(() => {
+    const createParam = searchParams.get(PARAM_CREATE);
+    const parentParam = searchParams.get(PARAM_PARENT);
+    if (createParam === '1' && projectId && !modalOpen) {
+      setForm((prev) => ({
+        ...prev,
+        parent: parentParam ?? '',
+        project: projectId,
+        type: project?.issueTypes?.[0]?.name ?? DEFAULT_TYPES[0],
+        priority: project?.priorities?.[Math.min(2, (project.priorities.length || 1) - 1)]?.name ?? 'Medium',
+        status: project?.statuses?.[0]?.name ?? 'Backlog',
+      }));
+      setSubmitError('');
+      setPendingFiles([]);
+      setModalOpen('create');
+      const next = new URLSearchParams(searchParams);
+      next.delete(PARAM_CREATE);
+      next.delete(PARAM_PARENT);
+      setSearchParams(next, { replace: true });
+    }
+  }, [searchParams.get(PARAM_CREATE), searchParams.get(PARAM_PARENT), projectId, project]);
+
+  async function handleModalSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!token) return;
+    setSubmittingModal(true);
+    setSubmitError('');
+    if (modalOpen === 'create') {
+      const res = await issuesApi.create(
+        {
+          title: form.title,
+          description: form.description,
+          type: form.type,
+          priority: form.priority,
+          status: form.status,
+          project: form.project,
+          assignee: form.assignee || undefined,
+          sprint: form.sprint || null,
+          storyPoints: form.storyPoints === '' ? null : Number(form.storyPoints),
+          parent: form.parent || undefined,
+          milestone: form.milestone || undefined,
+          customFieldValues: Object.keys(form.customFieldValues).length ? form.customFieldValues : undefined,
+          fixVersion: form.fixVersion.length ? form.fixVersion : undefined,
+          affectsVersions: form.affectsVersions.length ? form.affectsVersions : undefined,
+          labels: form.labels.length ? form.labels : undefined,
+        },
+        token
+      );
+      if (res.success && res.data) {
+        if (pendingFiles.length > 0) {
+          const issueId = res.data._id;
+          await Promise.all(
+            pendingFiles.map(async (file) => {
+              const formData = new FormData();
+              formData.append('file', file);
+              const { uploadFile } = await import('../lib/api');
+              const up = await uploadFile(file, token);
+              if (up.success && up.data) {
+                await attachmentsApi.add(
+                  issueId,
+                  { url: up.data.url, originalName: up.data.originalName, mimeType: up.data.mimeType, size: up.data.size },
+                  token
+                );
+              }
+            })
+          );
+        }
+        setModalOpen(null);
+        showToast({
+          title: `Issue Created : ${getIssueKey(res.data)}`,
+          body: 'click to view',
+          url: `/projects/${typeof res.data.project === 'object' ? res.data.project._id : res.data.project}/issues/${encodeURIComponent(getIssueKey(res.data))}`,
+          autoDismissMs: 5000,
+        });
+        if (form.parent === issue?._id) {
+          issuesApi.getSubtasks(issue._id, token).then((r) => {
+            if (r.success && r.data) setSubtasks(Array.isArray(r.data) ? r.data : []);
+          });
+        }
+      } else {
+        setSubmitError(res.message ?? 'Failed to create issue');
+      }
+    }
+    setSubmittingModal(false);
+  }
+
+  const reloadIssue = useCallback(() => {
+    if (!token || !projectId || !ticketId) return;
+    issuesApi.getByKey(projectId, decodeURIComponent(ticketId), token).then((res) => {
+      if (res.success && res.data) setIssue(res.data);
+      else setIssue(null);
+    });
+  }, [token, projectId, ticketId]);
 
   useEffect(() => {
     if (!token || !projectId || !ticketId) return;
@@ -69,9 +199,19 @@ export default function IssueDetail() {
   }, [token, projectId, ticketId]);
 
   useEffect(() => {
+    if (!projectId) return;
+    return subscribeProject(projectId, () => reloadIssue());
+  }, [projectId, subscribeProject, reloadIssue]);
+
+  useEffect(() => {
     if (!token || !projectId) return;
     projectsApi.get(projectId, token).then((res) => {
       if (res.success && res.data) setProject(res.data);
+    });
+    projectsApi.getMyPermissions(projectId, token).then((res) => {
+      if (res.success && res.data && 'permissions' in res.data) {
+        setProjectPermissions((res.data as { permissions: string[] }).permissions ?? []);
+      } else setProjectPermissions([]);
     });
   }, [token, projectId]);
 
@@ -172,6 +312,18 @@ export default function IssueDetail() {
     }
   }
 
+  async function updateComment(commentId: string, body: string) {
+    if (!token || !issue?._id || !body.trim()) return;
+    setEditingCommentId(commentId);
+    setSubmittingComment(true);
+    const res = await commentsApi.update(issue._id, commentId, body.trim(), token);
+    setSubmittingComment(false);
+    setEditingCommentId(null);
+    if (res.success && res.data) {
+      setComments((prev) => prev.map((c) => (c._id === commentId ? res.data! : c)));
+    }
+  }
+
   async function addWorkLog(payload: {
     minutesSpent: number;
     date: string;
@@ -194,10 +346,49 @@ export default function IssueDetail() {
     }
   }
 
-  async function updateIssue(payload: Parameters<typeof issuesApi.update>[1]) {
+  async function updateIssue(
+    payload: Parameters<typeof issuesApi.update>[1],
+    options?: { skipConcurrency?: boolean }
+  ) {
     if (!token || !issue?._id || !issue) return;
-    const res = await issuesApi.update(issue._id, payload, token);
-    if (res.success && res.data) setIssue(res.data);
+    const body = {
+      ...payload,
+      ...(options?.skipConcurrency || !issue.updatedAt
+        ? {}
+        : { expectedUpdatedAt: issue.updatedAt }),
+    };
+    const res = await issuesApi.update(issue._id, body, token);
+    if (!res.success && res.status === 409) {
+      const latest = (res.data as { latest?: Issue } | undefined)?.latest;
+      if (latest) {
+        setConflictLatest(latest);
+        setPendingUpdate(payload);
+        return;
+      }
+    }
+    if (res.success && res.data) {
+      setIssue(res.data);
+      setConflictLatest(null);
+      setPendingUpdate(null);
+    }
+  }
+
+  function handleConflictReload() {
+    if (conflictLatest) {
+      setIssue(conflictLatest);
+      setConflictLatest(null);
+      setPendingUpdate(null);
+    }
+  }
+
+  async function handleConflictOverwrite() {
+    if (!token || !issue?._id || !pendingUpdate) return;
+    const res = await issuesApi.update(issue._id, { ...pendingUpdate }, token);
+    if (res.success && res.data) {
+      setIssue(res.data);
+      setConflictLatest(null);
+      setPendingUpdate(null);
+    }
   }
 
   async function updateField(
@@ -208,8 +399,9 @@ export default function IssueDetail() {
       | 'assignee'
       | 'dueDate'
       | 'startDate'
+      | 'baselineDueDate'
+      | 'baselineStartDate'
       | 'storyPoints'
-      | 'fixVersion'
       | 'timeEstimateMinutes'
       | 'sprint',
     value: string | number | null
@@ -219,7 +411,10 @@ export default function IssueDetail() {
     const payload: Record<string, unknown> =
       field === 'assignee'
         ? { assignee: value === '' || value === '__unassigned__' ? '' : value }
-        : field === 'dueDate' || field === 'startDate'
+        : field === 'dueDate' ||
+            field === 'startDate' ||
+            field === 'baselineDueDate' ||
+            field === 'baselineStartDate'
           ? { [field]: value === '' ? null : value }
           : field === 'timeEstimateMinutes'
             ? { timeEstimateMinutes: value }
@@ -227,6 +422,13 @@ export default function IssueDetail() {
               ? { sprint: value === '' ? null : value }
               : { [field]: value };
     await updateIssue(payload);
+    setUpdatingField(null);
+  }
+
+  async function updateFixVersions(fixVersion: string[]) {
+    if (!token || !issue?._id) return;
+    setUpdatingField('fixVersion');
+    await updateIssue({ fixVersion });
     setUpdatingField(null);
   }
 
@@ -290,13 +492,75 @@ export default function IssueDetail() {
     else setWatchersError(res.message ?? 'Failed to unwatch');
   }
 
-  if (loading || !issue) {
+  if (loading) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center p-8">
-        {loading ? (
-          <div className="text-[color:var(--text-muted)] animate-pulse">Loading…</div>
-        ) : (
-          <div className="text-[color:var(--text-muted)]">Issue not found.</div>
+      <div className="flex flex-1 flex-col min-h-0">
+        <div className="flex flex-1 min-h-0 w-full max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-4 lg:py-6">
+          <div className="grid flex-1 min-h-0 grid-cols-1 lg:grid-cols-[1fr_minmax(260px,340px)] gap-4 lg:gap-6">
+            {/* Left skeleton */}
+            <div className="space-y-4">
+              <div className="space-y-3 pb-4 border-b border-[color:var(--border-subtle)]/60">
+                <div className="flex items-center gap-2">
+                  <div className="h-4 w-20 rounded bg-[color:var(--bg-elevated)] animate-pulse" />
+                  <div className="h-3 w-3 rounded-sm bg-[color:var(--bg-elevated)] animate-pulse" />
+                  <div className="h-5 w-16 rounded-md bg-[color:var(--bg-elevated)] animate-pulse" />
+                </div>
+                <div className="h-9 w-4/5 rounded-lg bg-[color:var(--bg-elevated)] animate-pulse" />
+                <div className="h-7 w-2/3 rounded-lg bg-[color:var(--bg-elevated)] animate-pulse" />
+                <div className="flex gap-2">
+                  <div className="h-6 w-16 rounded-full bg-[color:var(--bg-elevated)] animate-pulse" />
+                  <div className="h-6 w-14 rounded-full bg-[color:var(--bg-elevated)] animate-pulse" />
+                  <div className="h-6 w-20 rounded-full bg-[color:var(--bg-elevated)] animate-pulse" />
+                </div>
+              </div>
+              {[1, 2].map((i) => (
+                <div key={i} className="rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] overflow-hidden">
+                  <div className="h-10 bg-[color:var(--bg-elevated)] border-b border-[color:var(--border-subtle)] animate-pulse" />
+                  <div className="px-4 py-4 space-y-2.5">
+                    <div className="h-3 w-full rounded bg-[color:var(--bg-elevated)] animate-pulse" />
+                    <div className="h-3 w-5/6 rounded bg-[color:var(--bg-elevated)] animate-pulse" />
+                    <div className="h-3 w-3/4 rounded bg-[color:var(--bg-elevated)] animate-pulse" />
+                  </div>
+                </div>
+              ))}
+            </div>
+            {/* Right sidebar skeleton */}
+            <div className="rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] overflow-hidden">
+              <div className="h-11 bg-[color:var(--bg-elevated)] border-b border-[color:var(--border-subtle)] animate-pulse" />
+              <div className="divide-y divide-[color:var(--border-subtle)]/70">
+                {Array.from({ length: 7 }).map((_, i) => (
+                  <div key={i} className="px-4 py-3 space-y-2">
+                    <div className="h-2.5 w-12 rounded bg-[color:var(--bg-elevated)] animate-pulse" />
+                    <div className="h-7 w-full rounded-md bg-[color:var(--bg-elevated)] animate-pulse" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!issue) {
+    return (
+      <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 p-8 text-center">
+        <div className="w-14 h-14 rounded-full bg-[color:var(--bg-elevated)] flex items-center justify-center">
+          <FiAlertCircle className="w-7 h-7 text-[color:var(--text-muted)]" />
+        </div>
+        <div>
+          <p className="text-base font-semibold text-[color:var(--text-primary)]">Issue not found</p>
+          <p className="text-sm text-[color:var(--text-muted)] mt-1">
+            This issue may have been deleted or you don't have permission to view it.
+          </p>
+        </div>
+        {projectId && (
+          <Link
+            to={`/projects/${projectId}/issues`}
+            className="text-sm font-medium text-[color:var(--accent)] hover:underline underline-offset-2"
+          >
+            ← Back to issues
+          </Link>
         )}
       </div>
     );
@@ -305,22 +569,16 @@ export default function IssueDetail() {
   const projectName = typeof issue.project === 'object' && issue.project ? issue.project.name : '';
 
   return (
-    <div className="h-full flex flex-col animate-fade-in">
-      <div className="flex-1 overflow-auto">
-        <div className="bg-[color:var(--bg-surface)] border-b border-[color:var(--border-subtle)] px-4 sm:px-6 lg:px-8 py-5">
-          <TaskBreadcrumb
-            projectId={projectId}
-            projectName={projectName}
-            issueKey={getIssueKey(issue)}
-          />
-        </div>
-        <div className="w-full max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="grid grid-cols-1 lg:grid-cols-[1fr_minmax(260px,340px)] gap-6">
-            <div className="min-w-0 space-y-4">
+    <div className="flex flex-1 flex-col min-h-0 lg:overflow-hidden animate-fade-in">
+      <div className="flex flex-1 min-h-0 w-full max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-4 lg:py-6">
+        <div className="grid flex-1 min-h-0 grid-cols-1 lg:grid-cols-[1fr_minmax(260px,340px)] gap-4 lg:gap-6 lg:overflow-hidden">
+          <div className="flex min-w-0 flex-col lg:min-h-0 lg:overflow-hidden">
+            <div className="shrink-0 pb-3 lg:border-b border-[color:var(--border-subtle)]/60 bg-[color:var(--bg-page)]">
               <TaskHeader
                 issue={issue}
                 issueId={issue._id}
                 projectId={projectId}
+                projectName={projectName}
                 canLinkAndAttach={!!token}
                 onOpenLinkModal={() => secondaryTabsRef.current?.openLinkModal()}
                 onAttach={() => secondaryTabsRef.current?.openFilePicker()}
@@ -328,8 +586,22 @@ export default function IssueDetail() {
                 getPriorityMeta={getPriorityMeta}
                 getStatusMeta={getStatusMeta}
                 onUpdateTitle={updateTitle}
+                onDelete={() => setConfirmDelete(true)}
               />
+            </div>
+            <div className="space-y-4 pt-4 lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
               <TaskDescription issue={issue} onUpdateDescription={updateDescription} />
+              <EpicRollupPanel
+                issueId={issue._id}
+                token={token!}
+                show={/epic/i.test(issue.type) || subtasks.length > 0}
+              />
+              <StageEstimatePanel
+                issueId={issue._id}
+                project={project}
+                projectPermissions={projectPermissions}
+                hasChildren={subtasks.length > 0}
+              />
               <TaskSecondaryTabs
                 ref={secondaryTabsRef}
                 issue={issue}
@@ -353,7 +625,9 @@ export default function IssueDetail() {
                 issue={issue}
                 comments={comments}
                 onAddComment={addComment}
+                onUpdateComment={updateComment}
                 submittingComment={submittingComment}
+                editingCommentId={editingCommentId}
                 mentionUsers={users}
                 workLogs={workLogs}
                 currentUserId={user?.id}
@@ -362,8 +636,9 @@ export default function IssueDetail() {
                 submittingWorkLog={submittingWorkLog}
               />
             </div>
+          </div>
 
-            <TaskDetailsSidebar
+          <TaskDetailsSidebar
               issue={issue}
               project={project}
               projectId={projectId}
@@ -390,13 +665,13 @@ export default function IssueDetail() {
               newLabel={newLabel}
               onOpenTimeLog={() => setTimeLogOpen(true)}
               onUpdateField={updateField}
+              onUpdateFixVersions={updateFixVersions}
               onUpdateAffectsVersions={updateAffectsVersions}
               onAddLabel={addLabel}
               onRemoveLabel={removeLabel}
               onNewLabelChange={setNewLabel}
               sprints={sprints}
             />
-          </div>
         </div>
       </div>
 
@@ -433,6 +708,47 @@ export default function IssueDetail() {
         </div>
       )}
 
+      {conflictLatest &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+            onClick={() => {
+              setConflictLatest(null);
+              setPendingUpdate(null);
+            }}
+          >
+            <div
+              className="w-full max-w-md bg-[color:var(--bg-modal)] border border-[color:var(--border-subtle)] rounded-xl p-6 card-shadow"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 className="text-base font-bold text-[color:var(--text-primary)] mb-2">Edit conflict</h2>
+              <p className="text-sm text-[color:var(--text-muted)] mb-4">
+                Someone else updated this issue while you were editing. Reload their version or overwrite with your
+                changes.
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConflictLatest(null);
+                    setPendingUpdate(null);
+                  }}
+                  className="btn-secondary px-4 py-2 rounded-lg text-sm"
+                >
+                  Cancel
+                </button>
+                <button type="button" onClick={handleConflictReload} className="btn-secondary px-4 py-2 rounded-lg text-sm">
+                  Reload latest
+                </button>
+                <button type="button" onClick={handleConflictOverwrite} className="btn-primary px-4 py-2 rounded-lg text-sm">
+                  Overwrite
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
       <ConfirmModal
         open={confirmDelete}
         title="Delete issue"
@@ -442,6 +758,32 @@ export default function IssueDetail() {
         onConfirm={handleDelete}
         onCancel={() => setConfirmDelete(false)}
       />
+
+      {project && (
+        <IssueCreateEditModal
+          modal={modalOpen}
+          setModal={setModalOpen}
+          form={form}
+          setForm={setForm}
+          submitError={submitError}
+          submitting={submittingModal}
+          handleSubmit={handleModalSubmit}
+          typeList={typeList}
+          priorityList={priorityList}
+          statusList={statusList}
+          users={users}
+          parentCandidates={[]} 
+          project={project}
+          getIssueKey={getIssueKey}
+          projects={[project]}
+          showProjectSelector={false}
+          milestones={[]} 
+          sprints={sprints}
+          labelSuggestions={[]}
+          pendingFiles={pendingFiles}
+          onPendingFilesChange={setPendingFiles}
+        />
+      )}
     </div>
   );
 }

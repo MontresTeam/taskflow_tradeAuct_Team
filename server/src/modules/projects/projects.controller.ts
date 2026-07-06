@@ -11,11 +11,16 @@ import { getProjectPermissionsForUser } from '../../middleware/requireProjectPer
 import { ApiError } from '../../utils/ApiError';
 import { logAudit } from '../auditLogs/logAudit';
 import * as analyticsService from '../analytics/analytics.service';
+import * as issueGraphService from '../issues/issueGraph.service';
+import * as stageEstimateService from '../stageEstimates/stageEstimate.service';
+import { dryRunHandler, enableEstimateApproval } from '../projectRules/projectRules.controller';
 
 export async function createProject(req: Request & { user?: AuthPayload }, res: Response): Promise<void> {
   const creatorId = req.user?.id;
   if (!creatorId) throw new ApiError(401, 'Unauthorized');
-  const project = await projectsService.create(req.body, creatorId);
+  const activeOrg = req.activeOrganizationId;
+  if (!activeOrg) throw new ApiError(400, 'Active workspace is required');
+  const project = await projectsService.create(req.body, creatorId, activeOrg);
   const proj = project as unknown as { _id?: string; name?: string; key?: string };
   logAudit({
     userId: creatorId,
@@ -42,27 +47,50 @@ export async function getProjects(req: Request & { user?: AuthPayload }, res: Re
   }
   const page = parseInt(String(req.query.page), 10) || 1;
   const limit = Math.min(parseInt(String(req.query.limit), 10) || 20, 100);
-  const result = await projectsService.findAllForUser(userId, permissions, { page, limit });
+  const activeOrg = req.activeOrganizationId;
+  if (!activeOrg) throw new ApiError(400, 'Active workspace is required');
+  const result = await projectsService.findAllForUser(userId, permissions, activeOrg, { page, limit });
   res.status(200).json({ success: true, data: result });
 }
 
 export async function getProjectById(req: Request, res: Response): Promise<void> {
-  const project = await projectsService.findById(req.params.id);
+  const activeOrg = req.activeOrganizationId;
+  if (!activeOrg) throw new ApiError(400, 'Active workspace is required');
+  const project = await projectsService.findById(req.params.id, activeOrg);
   if (!project) throw new ApiError(404, 'Project not found');
   res.status(200).json({ success: true, data: project });
+}
+
+export async function getResolvedCustomFields(req: Request, res: Response): Promise<void> {
+  const activeOrg = req.activeOrganizationId;
+  if (!activeOrg) throw new ApiError(400, 'Active workspace is required');
+  const issueType = String(req.query.issueType ?? '');
+  const data = await projectsService.getResolvedCustomFields(
+    req.params.id,
+    issueType,
+    activeOrg
+  );
+  res.status(200).json({ success: true, data });
 }
 
 export async function getMyPermissions(req: Request & { user?: AuthPayload }, res: Response): Promise<void> {
   const userId = req.user?.id;
   if (!userId) throw new ApiError(401, 'Unauthorized');
   const projectId = req.params.id;
-  const permissions = await getProjectPermissionsForUser(projectId, userId, req.user?.permissions ?? []);
+  const permissions = await getProjectPermissionsForUser(
+    projectId,
+    userId,
+    req.user?.permissions ?? [],
+    req.activeOrganizationId
+  );
   res.status(200).json({ success: true, data: { permissions } });
 }
 
 export async function saveSettingsTemplate(req: Request & { user?: AuthPayload }, res: Response): Promise<void> {
   const userId = req.user?.id;
-  const created = await projectsService.saveAsTemplate(req.params.id, req.body);
+  const activeOrg = req.activeOrganizationId;
+  if (!activeOrg) throw new ApiError(400, 'Active workspace is required');
+  const created = await projectsService.saveAsTemplate(req.params.id, req.body, activeOrg);
   if (!created) throw new ApiError(404, 'Project not found');
   const c = created as { _id?: unknown; name?: string };
   if (userId && c._id) {
@@ -81,7 +109,9 @@ export async function saveSettingsTemplate(req: Request & { user?: AuthPayload }
 
 export async function updateProject(req: Request & { user?: AuthPayload }, res: Response): Promise<void> {
   const userId = req.user?.id;
-  const project = await projectsService.update(req.params.id, req.body);
+  const activeOrg = req.activeOrganizationId;
+  if (!activeOrg) throw new ApiError(400, 'Active workspace is required');
+  const project = await projectsService.update(req.params.id, req.body, activeOrg);
   if (!project) throw new ApiError(404, 'Project not found');
   if (userId) {
     const proj = project as { name?: string; key?: string };
@@ -99,15 +129,26 @@ export async function updateProject(req: Request & { user?: AuthPayload }, res: 
 }
 
 export async function deleteProject(req: Request, res: Response): Promise<void> {
-  const deleted = await projectsService.remove(req.params.id);
+  const activeOrg = req.activeOrganizationId;
+  if (!activeOrg) throw new ApiError(400, 'Active workspace is required');
+  const deleted = await projectsService.remove(req.params.id, activeOrg);
   if (!deleted) throw new ApiError(404, 'Project not found');
   res.status(200).json({ success: true, data: { message: 'Project deleted' } });
 }
 
-export async function releaseVersion(req: Request, res: Response): Promise<void> {
+export async function releaseVersion(req: Request & { user?: { id: string } }, res: Response): Promise<void> {
   const projectId = req.params.id;
+  const activeOrg = req.activeOrganizationId;
+  if (!activeOrg) throw new ApiError(400, 'Active workspace is required');
   const { versionId, environmentId, issueIds } = req.body;
-  const result = await projectsService.releaseVersionToEnvironment(projectId, versionId, environmentId, issueIds);
+  const result = await projectsService.releaseVersionToEnvironment(
+    projectId,
+    versionId,
+    environmentId,
+    issueIds,
+    activeOrg,
+    req.user?.id
+  );
   res.status(200).json({ success: true, data: result });
 }
 
@@ -172,6 +213,21 @@ export async function getSprintReport(req: Request & { user?: AuthPayload }, res
   res.status(200).json({ success: true, data: { burndown, velocity, summary } });
 }
 
+export async function getProjectIssueGraph(req: Request & { user?: AuthPayload }, res: Response): Promise<void> {
+  const userId = req.user?.id;
+  if (!userId) throw new ApiError(401, 'Unauthorized');
+  const projectId = req.params.id;
+  const q = req.query;
+  const depthRaw = q.depth != null ? parseInt(String(q.depth), 10) : undefined;
+  const data = await issueGraphService.getProjectIssueGraph(projectId, userId, {
+    linkTypes: q.linkTypes != null ? String(q.linkTypes) : undefined,
+    centerIssueId: q.centerIssueId != null ? String(q.centerIssueId) : undefined,
+    depth: Number.isFinite(depthRaw) ? depthRaw : undefined,
+    includeParentEdges: q.includeParentEdges !== 'false',
+  });
+  res.status(200).json({ success: true, data });
+}
+
 export async function getTimesheet(req: Request & { user?: AuthPayload }, res: Response): Promise<void> {
   const projectId = req.params.id;
   if (!projectId) throw new ApiError(400, 'Project ID is required');
@@ -210,6 +266,12 @@ export const idParamHandler = [
   validate(projectsValidation.idParam.shape.params, 'params'),
 ];
 
+export const resolvedFieldsHandler = [
+  validate(projectsValidation.resolvedFieldsQuery.shape.params, 'params'),
+  validate(projectsValidation.resolvedFieldsQuery.shape.query, 'query'),
+  asyncHandler(getResolvedCustomFields),
+];
+
 export const releaseVersionHandler = [
   validate(projectsValidation.releaseVersion.shape.params, 'params'),
   validate(projectsValidation.releaseVersion.shape.body, 'body'),
@@ -231,6 +293,32 @@ export const timesheetHandler = [
   validate(projectsValidation.timesheetQuery.shape.params, 'params'),
   validate(projectsValidation.timesheetQuery.shape.query, 'query'),
   asyncHandler(getTimesheet),
+];
+
+export async function getEstimateApprovals(req: Request & { user?: AuthPayload }, res: Response): Promise<void> {
+  const userId = req.user?.id;
+  if (!userId) throw new ApiError(401, 'Unauthorized');
+  const activeOrg = req.activeOrganizationId;
+  if (!activeOrg) throw new ApiError(400, 'Active workspace is required');
+  const data = await stageEstimateService.listPendingApprovalsForProject(
+    req.params.id,
+    userId,
+    req.user?.permissions,
+    activeOrg
+  );
+  res.status(200).json({ success: true, data });
+}
+
+export const estimateApprovalsHandler = [
+  validate(projectsValidation.idParam.shape.params, 'params'),
+  asyncHandler(getEstimateApprovals),
+];
+
+export const projectRulesDryRunHandler = dryRunHandler;
+
+export const enableEstimateApprovalHandler = [
+  validate(projectsValidation.idParam.shape.params, 'params'),
+  asyncHandler(enableEstimateApproval),
 ];
 
 export const sprintReportHandler = [

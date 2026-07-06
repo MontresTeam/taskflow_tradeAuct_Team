@@ -25,6 +25,7 @@ import * as watchersService from '../watchers/watchers.service';
 import { ApiError } from '../../utils/ApiError';
 import { logAudit } from '../auditLogs/logAudit';
 import * as analyticsService from '../analytics/analytics.service';
+import * as issueHierarchyService from './issueHierarchy.service';
 
 export async function createIssue(req: Request & { user?: AuthPayload }, res: Response): Promise<void> {
   const reporterId = req.user?.id;
@@ -52,6 +53,14 @@ export async function getIssues(req: Request & { user?: AuthPayload }, res: Resp
   const filters = issuesService.queryToFilters(req.query as import('./issue.validation').ListIssuesQuery);
   const result = await issuesService.findAll(filters, { page, limit }, userId);
   res.status(200).json({ success: true, data: result });
+}
+
+export async function getQuickFilterCounts(req: Request & { user?: AuthPayload }, res: Response): Promise<void> {
+  const userId = req.user?.id;
+  if (!userId) throw new ApiError(401, 'Unauthorized');
+  const project = req.query.project ? String(req.query.project) : undefined;
+  const data = await issuesService.getQuickFilterCounts(userId, project);
+  res.status(200).json({ success: true, data });
 }
 
 export async function exportIssuesExcel(req: Request & { user?: AuthPayload }, res: Response): Promise<void> {
@@ -316,6 +325,13 @@ export async function getWatchingStatusBatch(req: Request & { user?: AuthPayload
 export async function getSubtasks(req: Request, res: Response): Promise<void> {
   const children = await issuesService.findChildren(req.params.id);
   res.status(200).json({ success: true, data: children });
+}
+
+export async function getIssueRollup(req: Request & { user?: AuthPayload }, res: Response): Promise<void> {
+  const userId = req.user?.id;
+  if (!userId) throw new ApiError(401, 'Unauthorized');
+  const data = await issueHierarchyService.getIssueRollup(req.params.id, userId);
+  res.status(200).json({ success: true, data });
 }
 
 export async function getIssueHistory(req: Request, res: Response): Promise<void> {

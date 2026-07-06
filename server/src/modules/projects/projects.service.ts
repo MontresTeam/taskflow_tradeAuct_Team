@@ -1,16 +1,24 @@
 import mongoose from 'mongoose';
 import { Project } from './project.model';
+import {
+  isPromoteToEnvironment,
+} from './environmentHierarchy';
 import { ProjectMember } from './projectMember.model';
 import { Issue } from '../issues/issue.model';
+import * as issueNotification from '../issues/issueNotification.service';
 import { User } from '../auth/user.model';
 import { ApiError } from '../../utils/ApiError';
-import * as inboxService from '../inbox/inbox.service';
+import * as releaseNotificationService from './releaseNotification.service';
+import type { IProjectReleaseRule } from './project.model';
 import * as projectTemplatesService from '../projectTemplates/projectTemplates.service';
 import * as projectInvitationsService from './projectInvitations.service';
 import * as projectDesignationService from './projectDesignation.service';
 import type { CreateProjectBody, UpdateProjectBody } from './projects.validation';
+import { resolveFieldsForIssueType, resolveIssueTypeId } from './fieldScheme.service';
+import type { IProjectCustomField, IFieldScheme } from './project.model';
 import { userHasPermission, mapLegacyProjectOrGlobalPermissions } from '../../shared/constants/legacyPermissionMap';
 import { PROJECT_PERMISSIONS } from '../../shared/constants/permissions';
+import { hasProjectFullAccess } from '../../middleware/requireProjectPermission';
 
 export interface PaginationOptions {
   page: number;
@@ -27,12 +35,16 @@ export interface PaginatedResult<T> {
 
 export async function create(
   input: CreateProjectBody,
-  creatorUserId: string
+  creatorUserId: string,
+  taskflowOrganizationId: string
 ): Promise<mongoose.Document> {
+  if (!mongoose.Types.ObjectId.isValid(taskflowOrganizationId)) {
+    throw new ApiError(400, 'Invalid workspace id');
+  }
   const key = input.key.toUpperCase();
-  const existing = await Project.findOne({ key }).lean();
+  const existing = await Project.findOne({ key, taskflowOrganizationId }).lean();
   if (existing) {
-    throw new ApiError(409, `Project with key "${key}" already exists`);
+    throw new ApiError(409, `Project with key "${key}" already exists in this workspace`);
   }
   const leadUserId = String(input.lead).trim();
   if (!mongoose.Types.ObjectId.isValid(leadUserId)) {
@@ -44,9 +56,22 @@ export async function create(
   }
 
   const config = input.templateId
-    ? await projectTemplatesService.getById(input.templateId)
+    ? await projectTemplatesService.getById(input.templateId, taskflowOrganizationId)
     : null;
-  const template = config as { statuses?: unknown[]; issueTypes?: unknown[]; priorities?: unknown[] } | null;
+  const tid = input.templateId ? String(input.templateId).trim() : '';
+  if (tid && tid !== 'default' && !config) {
+    throw new ApiError(404, 'Template not found in this workspace');
+  }
+  const template = config as {
+    statuses?: unknown[];
+    issueTypes?: unknown[];
+    priorities?: unknown[];
+    customFields?: unknown[];
+    fieldSchemes?: unknown[];
+    projectRules?: unknown[];
+    estimateApprovalEnabled?: boolean;
+    rulesEnforcementMode?: 'log' | 'enforce';
+  } | null;
   const defaultConfig = projectTemplatesService.getDefaultConfig();
   const statuses = (template?.statuses?.length ? template.statuses : defaultConfig.statuses) as typeof defaultConfig.statuses;
   const issueTypes = (template?.issueTypes?.length ? template.issueTypes : defaultConfig.issueTypes) as typeof defaultConfig.issueTypes;
@@ -57,9 +82,15 @@ export async function create(
     key,
     description: input.description ?? '',
     lead: leadUserId,
+    taskflowOrganizationId,
     statuses,
     issueTypes,
     priorities,
+    customFields: (template?.customFields as unknown[] | undefined) ?? [],
+    fieldSchemes: (template?.fieldSchemes as unknown[] | undefined) ?? [],
+    projectRules: (template?.projectRules as unknown[] | undefined) ?? [],
+    estimateApprovalEnabled: template?.estimateApprovalEnabled ?? false,
+    rulesEnforcementMode: template?.rulesEnforcementMode ?? 'enforce',
   });
   const projectId = project._id.toString();
 
@@ -72,6 +103,18 @@ export async function create(
   // Creator may differ from lead; they still need membership to access the project they created.
   if (creatorUserId && creatorUserId !== leadUserId) {
     await projectInvitationsService.ensureUserHasFullProjectAccess(projectId, creatorUserId);
+  }
+
+  // Automatically add all users who have global project CRUD permissions as default members
+  const globalAccessUsers = await User.find({ enabled: true }).select('_id permissions').lean();
+  const globalUserIds = globalAccessUsers
+    .filter((u) => hasProjectFullAccess(u.permissions || []))
+    .map((u) => String(u._id));
+
+  for (const uid of globalUserIds) {
+    if (uid !== leadUserId && uid !== creatorUserId) {
+      await projectInvitationsService.ensureUserIsDefaultProjectMember(projectId, uid);
+    }
   }
 
   return project;
@@ -98,19 +141,24 @@ export async function findAll(
 export async function findAllForUser(
   userId: string,
   _permissions: string[],
+  activeTaskflowOrganizationId: string,
   opts: PaginationOptions = { page: 1, limit: 20 }
 ): Promise<PaginatedResult<unknown>> {
   // Only show projects the user is a member of (accepted invitation or added as member).
   const userObjectId = mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : userId;
   const projectIds = await ProjectMember.find({ user: userObjectId }).distinct('project');
+  const orgFilter = {
+    _id: { $in: projectIds },
+    taskflowOrganizationId: activeTaskflowOrganizationId,
+  };
   const skip = (opts.page - 1) * opts.limit;
   const [data, total] = await Promise.all([
-    Project.find({ _id: { $in: projectIds } })
+    Project.find(orgFilter)
       .populate('lead', 'name email')
       .lean()
       .skip(skip)
       .limit(opts.limit),
-    Project.countDocuments({ _id: { $in: projectIds } }),
+    Project.countDocuments(orgFilter),
   ]);
 
   // Per-project permissions so the UI can show/hide Edit and Delete.
@@ -130,10 +178,11 @@ export async function findAllForUser(
   const dataWithPerms = (data as Record<string, unknown>[]).map((p) => {
     const pid = (p._id as mongoose.Types.ObjectId).toString();
     const perms = permissionsByProject.get(pid) ?? [];
+    const isGlobalAdmin = hasProjectFullAccess(_permissions);
     return {
       ...p,
-      canEdit: userHasPermission(perms, PROJECT_PERMISSIONS.SETTING.PROJECT_SETTING.UPDATE),
-      canDelete: userHasPermission(perms, PROJECT_PERMISSIONS.SCOPE.DELETE),
+      canEdit: isGlobalAdmin || userHasPermission(perms, PROJECT_PERMISSIONS.SETTING.PROJECT_SETTING.UPDATE),
+      canDelete: isGlobalAdmin || userHasPermission(perms, PROJECT_PERMISSIONS.SCOPE.DELETE),
     };
   });
 
@@ -146,8 +195,13 @@ export async function findAllForUser(
   };
 }
 
-export async function findById(id: string): Promise<unknown | null> {
-  const project = await Project.findById(id).populate('lead', 'name email').lean();
+export async function findById(id: string, activeTaskflowOrganizationId: string): Promise<unknown | null> {
+  const project = await Project.findOne({
+    _id: id,
+    taskflowOrganizationId: activeTaskflowOrganizationId,
+  })
+    .populate('lead', 'name email')
+    .lean();
   if (!project) return null;
   const out = withProjectDefaults(project as Record<string, unknown>);
   const versions = out.versions as Array<{ id: string }> | undefined;
@@ -199,39 +253,89 @@ function withProjectDefaults(p: Record<string, unknown>): Record<string, unknown
     ];
   }
   if (!p.customFields) p.customFields = [];
+  if (!p.fieldSchemes) p.fieldSchemes = [];
   if (!p.versions) p.versions = [];
   if (!p.environments) p.environments = [];
   if (!p.releaseRules) p.releaseRules = [];
+  if (!p.projectRules) p.projectRules = [];
+  if (p.estimateApprovalEnabled === undefined) p.estimateApprovalEnabled = false;
+  if (!p.rulesEnforcementMode) p.rulesEnforcementMode = 'enforce';
   return p;
+}
+
+export async function getResolvedCustomFields(
+  projectId: string,
+  issueTypeName: string,
+  activeTaskflowOrganizationId: string,
+  previewIssue?: Record<string, unknown>
+): Promise<unknown[]> {
+  const project = await Project.findOne({
+    _id: projectId,
+    taskflowOrganizationId: activeTaskflowOrganizationId,
+  }).lean();
+  if (!project) throw new ApiError(404, 'Project not found');
+  const p = withProjectDefaults(project as Record<string, unknown>);
+  const issueTypes = (p.issueTypes ?? []) as Array<{ id: string; name: string }>;
+  const typeId = resolveIssueTypeId(issueTypes, issueTypeName);
+  const fields = resolveFieldsForIssueType(
+    (p.customFields ?? []) as IProjectCustomField[],
+    (p.fieldSchemes ?? []) as IFieldScheme[],
+    typeId
+  );
+  if (!previewIssue) return fields;
+  const { evaluateFormula } = await import('./customFieldFormula.service');
+  return fields.map((f) => {
+    if (f.fieldType !== 'formula') return f;
+    const val = evaluateFormula(f.formula, previewIssue);
+    return { ...f, computedValue: val };
+  });
 }
 
 export async function saveAsTemplate(
   projectId: string,
-  input: { name: string; description?: string }
+  input: { name: string; description?: string },
+  activeTaskflowOrganizationId: string
 ): Promise<unknown | null> {
-  const project = await Project.findById(projectId).lean();
+  const project = await Project.findOne({
+    _id: projectId,
+    taskflowOrganizationId: activeTaskflowOrganizationId,
+  }).lean();
   if (!project) return null;
   const p = withProjectDefaults(project as Record<string, unknown>) as {
     statuses?: unknown[];
     issueTypes?: unknown[];
     priorities?: unknown[];
+    customFields?: unknown[];
+    fieldSchemes?: unknown[];
+    projectRules?: unknown[];
+    estimateApprovalEnabled?: boolean;
+    rulesEnforcementMode?: 'log' | 'enforce';
   };
   return projectTemplatesService.createTemplateRecord({
+    taskflowOrganizationId: activeTaskflowOrganizationId,
     name: input.name.trim(),
     description: (input.description ?? '').trim(),
     statuses: (p.statuses ?? []) as unknown[],
     issueTypes: (p.issueTypes ?? []) as unknown[],
     priorities: (p.priorities ?? []) as unknown[],
+    customFields: (p.customFields ?? []) as unknown[],
+    fieldSchemes: (p.fieldSchemes ?? []) as unknown[],
+    projectRules: (p.projectRules ?? []) as unknown[],
+    estimateApprovalEnabled: p.estimateApprovalEnabled ?? false,
+    rulesEnforcementMode: p.rulesEnforcementMode ?? 'enforce',
   });
 }
 
 export async function update(
   id: string,
-  input: UpdateProjectBody
+  input: UpdateProjectBody,
+  activeTaskflowOrganizationId: string
 ): Promise<unknown | null> {
   let previousLeadId: string | null = null;
   if (input.lead !== undefined) {
-    const existingProj = await Project.findById(id).select('lead').lean();
+    const existingProj = await Project.findOne({ _id: id, taskflowOrganizationId: activeTaskflowOrganizationId })
+      .select('lead')
+      .lean();
     if (existingProj && (existingProj as { lead?: unknown }).lead != null) {
       previousLeadId = String((existingProj as { lead: unknown }).lead);
     }
@@ -253,24 +357,50 @@ export async function update(
   }
   if (input.key !== undefined) {
     const key = input.key.toUpperCase();
-    const existing = await Project.findOne({ key, _id: { $ne: id } }).lean();
-    if (existing) throw new ApiError(409, `Project with key "${key}" already exists`);
+    const existing = await Project.findOne({
+      key,
+      taskflowOrganizationId: activeTaskflowOrganizationId,
+      _id: { $ne: id },
+    }).lean();
+    if (existing) throw new ApiError(409, `Project with key "${key}" already exists in this workspace`);
     updateData.key = key;
   }
   if (input.templateId !== undefined && String(input.templateId).trim() !== '') {
-    const config = await projectTemplatesService.getById(String(input.templateId).trim());
-    if (!config) throw new ApiError(404, 'Template not found');
-    const template = config as { statuses?: unknown[]; issueTypes?: unknown[]; priorities?: unknown[] };
+    const config = await projectTemplatesService.getById(
+      String(input.templateId).trim(),
+      activeTaskflowOrganizationId
+    );
+    if (!config) throw new ApiError(404, 'Template not found in this workspace');
+    const template = config as {
+      statuses?: unknown[];
+      issueTypes?: unknown[];
+      priorities?: unknown[];
+      customFields?: unknown[];
+      fieldSchemes?: unknown[];
+      projectRules?: unknown[];
+      estimateApprovalEnabled?: boolean;
+      rulesEnforcementMode?: 'log' | 'enforce';
+    };
     const defaultConfig = projectTemplatesService.getDefaultConfig();
     updateData.statuses = (template.statuses?.length ? template.statuses : defaultConfig.statuses) as unknown[];
     updateData.issueTypes = (template.issueTypes?.length ? template.issueTypes : defaultConfig.issueTypes) as unknown[];
     updateData.priorities = (template.priorities?.length ? template.priorities : defaultConfig.priorities) as unknown[];
+    if (template.customFields?.length) updateData.customFields = template.customFields;
+    if (template.fieldSchemes?.length) updateData.fieldSchemes = template.fieldSchemes;
+    if (template.projectRules?.length) updateData.projectRules = template.projectRules;
+    if (template.estimateApprovalEnabled !== undefined) {
+      updateData.estimateApprovalEnabled = template.estimateApprovalEnabled;
+    }
+    if (template.rulesEnforcementMode !== undefined) {
+      updateData.rulesEnforcementMode = template.rulesEnforcementMode;
+    }
   } else {
     if (input.statuses !== undefined) updateData.statuses = input.statuses;
     if (input.issueTypes !== undefined) updateData.issueTypes = input.issueTypes;
     if (input.priorities !== undefined) updateData.priorities = input.priorities;
   }
   if (input.customFields !== undefined) updateData.customFields = input.customFields;
+  if (input.fieldSchemes !== undefined) updateData.fieldSchemes = input.fieldSchemes;
   if (input.versions !== undefined) {
     updateData.versions = input.versions.map((v) => ({
       ...v,
@@ -279,9 +409,22 @@ export async function update(
   }
   if (input.environments !== undefined) updateData.environments = input.environments;
   if (input.releaseRules !== undefined) updateData.releaseRules = input.releaseRules;
+  if (input.projectRules !== undefined) updateData.projectRules = input.projectRules;
+  if (input.estimateApprovalEnabled !== undefined) {
+    updateData.estimateApprovalEnabled = input.estimateApprovalEnabled;
+    if (input.estimateApprovalEnabled) {
+      const { getDefaultEstimateApprovalRules } = await import('../projectRules/projectRules.defaultPack');
+      const existing = await Project.findById(id).select('projectRules').lean();
+      const rules = (existing as { projectRules?: unknown[] } | null)?.projectRules ?? [];
+      if (!rules.length && input.projectRules === undefined) {
+        updateData.projectRules = getDefaultEstimateApprovalRules();
+      }
+    }
+  }
+  if (input.rulesEnforcementMode !== undefined) updateData.rulesEnforcementMode = input.rulesEnforcementMode;
 
-  const project = await Project.findByIdAndUpdate(
-    id,
+  const project = await Project.findOneAndUpdate(
+    { _id: id, taskflowOrganizationId: activeTaskflowOrganizationId },
     { $set: updateData },
     { new: true, runValidators: true }
   )
@@ -308,8 +451,8 @@ export async function update(
   return out;
 }
 
-export async function remove(id: string): Promise<boolean> {
-  const result = await Project.findByIdAndDelete(id);
+export async function remove(id: string, activeTaskflowOrganizationId: string): Promise<boolean> {
+  const result = await Project.findOneAndDelete({ _id: id, taskflowOrganizationId: activeTaskflowOrganizationId });
   return result != null;
 }
 
@@ -317,20 +460,49 @@ export async function releaseVersionToEnvironment(
   projectId: string,
   versionId: string,
   environmentId: string,
-  issueIds?: string[]
+  issueIds: string[] | undefined,
+  activeTaskflowOrganizationId: string,
+  releasedByUserId?: string
 ): Promise<{ releaseNotes: string; version: unknown; updatedCount: number }> {
-  const rawProject = await Project.findById(projectId).lean();
+  const rawProject = await Project.findOne({
+    _id: projectId,
+    taskflowOrganizationId: activeTaskflowOrganizationId,
+  }).lean();
   if (!rawProject) throw new ApiError(404, 'Project not found');
   const project = withProjectDefaults(rawProject as Record<string, unknown>) as Record<string, unknown>;
-  const p = project as { versions?: Array<{ id: string; name: string }>; environments?: Array<{ id: string; name: string }>; releaseRules?: Array<{ environmentId: string; statusName: string }>; statuses?: Array<{ name: string }>; issueTypes?: Array<{ name: string; order: number }> };
+  const p = project as {
+    versions?: Array<{ id: string; name: string; releasedAtByEnvironment?: Record<string, string> }>;
+    environments?: Array<{ id: string; name: string; order: number }>;
+    releaseRules?: IProjectReleaseRule[];
+    statuses?: Array<{ name: string }>;
+    issueTypes?: Array<{ name: string; order: number }>;
+  };
   const version = p.versions?.find((v) => v.id === versionId);
   if (!version) throw new ApiError(404, 'Version not found');
-  const env = p.environments?.find((e) => e.id === environmentId);
+  const envList = p.environments ?? [];
+  const env = envList.find((e) => e.id === environmentId);
   if (!env) throw new ApiError(404, 'Environment not found');
-  const rule = p.releaseRules?.find((r) => r.environmentId === environmentId);
+  const promoteRelease = isPromoteToEnvironment(envList, version, environmentId);
+  if (version.releasedAtByEnvironment?.[environmentId]) {
+    throw new ApiError(400, `Version is already released to "${env.name}". Choose a higher environment to promote.`);
+  }
+  const rule = p.releaseRules?.find((r) => r.environmentId === environmentId) as IProjectReleaseRule | undefined;
   if (!rule) throw new ApiError(400, `No release rule for environment "${env.name}". Configure it in Project settings → Release rules.`);
   const validStatuses = (p.statuses ?? []).map((s) => s.name);
   if (!validStatuses.includes(rule.statusName)) throw new ApiError(400, `Release rule status "${rule.statusName}" is not a valid project status. Add or restore "${rule.statusName}" in Project settings → Statuses.`);
+
+  const assigneeIdRaw = rule.assigneeId?.trim();
+  let releaseAssigneeId: string | undefined;
+  if (assigneeIdRaw) {
+    if (!mongoose.Types.ObjectId.isValid(assigneeIdRaw)) {
+      throw new ApiError(400, 'Release rule assignee is not a valid user id.');
+    }
+    const isMember = await ProjectMember.exists({ project: projectId, user: assigneeIdRaw });
+    if (!isMember) {
+      throw new ApiError(400, 'Release rule assignee must be a member of this project.');
+    }
+    releaseAssigneeId = assigneeIdRaw;
+  }
 
   const useSelection = Array.isArray(issueIds);
   const selectedIds = useSelection ? issueIds : [];
@@ -342,22 +514,71 @@ export async function releaseVersionToEnvironment(
       : useSelection && selectedIds.length === 0
         ? { project: projectId, fixVersion: versionId, _id: { $in: [] } }
         : { project: projectId, fixVersion: versionId };
+
+  const releaseUpdate: Record<string, unknown> = { status: rule.statusName };
+  if (releaseAssigneeId) {
+    releaseUpdate.assignee = new mongoose.Types.ObjectId(releaseAssigneeId);
+  }
+
+  const issuesForAssignNotify = releaseAssigneeId
+    ? await Issue.find(queryIncluded)
+        .select('_id key title type status assignee project')
+        .populate('project', 'key name')
+        .lean()
+    : [];
+
   const issues = await Issue.find(queryIncluded)
     .populate('project', 'key')
     .lean();
 
-  await Issue.updateMany(queryIncluded, { $set: { status: rule.statusName } });
+  await Issue.updateMany(queryIncluded, { $set: releaseUpdate });
 
-  // If user selected a subset, clear fixVersion from issues not in selection
-  if (useSelection && selectedIds.length > 0) {
+  if (releaseAssigneeId && issuesForAssignNotify.length > 0) {
+    const actorId = releasedByUserId ?? '';
+    for (const issueDoc of issuesForAssignNotify) {
+      const issue = {
+        ...(issueDoc as unknown as issueNotification.IssueNotifySnapshot & {
+          assignee?: { _id?: unknown } | null;
+        }),
+        _id: String(issueDoc._id),
+        status: rule.statusName,
+      };
+      const previousAssigneeId = issue.assignee?._id ? String(issue.assignee._id) : null;
+      if (previousAssigneeId === releaseAssigneeId) continue;
+      if (previousAssigneeId) {
+        issueNotification
+          .notifyIssueUnassigned({
+            issue,
+            previousAssigneeUserId: previousAssigneeId,
+            actorUserId: actorId,
+          })
+          .catch((err) => console.error('[release] unassign notify failed:', err));
+      }
+      issueNotification
+        .notifyIssueAssigned({
+          issue,
+          assigneeUserId: releaseAssigneeId,
+          actorUserId: actorId,
+        })
+        .catch((err) => console.error('[release] assign notify failed:', err));
+    }
+  }
+
+  // Promoting to a higher tier: keep fixVersion on issues not in selection (same version, no new version row).
+  if (!promoteRelease) {
+    if (useSelection && selectedIds.length > 0) {
+      await Issue.updateMany(
+        { project: projectId, fixVersion: versionId, _id: { $nin: selectedIds } },
+        { $pull: { fixVersion: versionId } }
+      );
+    } else if (useSelection && selectedIds.length === 0) {
+      await Issue.updateMany(
+        { project: projectId, fixVersion: versionId },
+        { $pull: { fixVersion: versionId } }
+      );
+    }
     await Issue.updateMany(
-      { project: projectId, fixVersion: versionId, _id: { $nin: selectedIds } },
-      { $unset: { fixVersion: 1 } }
-    );
-  } else if (useSelection && selectedIds.length === 0) {
-    // User unchecked all: remove version from every issue that had it
-    await Issue.updateMany(
-      { project: projectId, fixVersion: versionId },
+      { project: projectId, fixVersion: { $exists: true, $size: 0 } },
       { $unset: { fixVersion: 1 } }
     );
   }
@@ -365,12 +586,22 @@ export async function releaseVersionToEnvironment(
   // Group by issue type (dynamic from project issue types); section headings = type names
   const issueTypeNames = (p.issueTypes ?? []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map((t) => t.name);
   const byType: Record<string, Array<{ key: string; title: string; description: string }>> = {};
+  /** One line for GFM table cells: strip HTML, normalize whitespace, cap length. */
+  const plainTextForMarkdownCell = (raw: string, maxLen = 50000): string => {
+    let s = (raw ?? '').trim();
+    if (!s) return '';
+    s = s.replace(/<[^>]+>/g, ' ');
+    s = s.replace(/\s+/g, ' ');
+    s = s.replace(/\|/g, ', ');
+    if (s.length > maxLen) return `${s.slice(0, maxLen)}…`;
+    return s;
+  };
   for (const issue of issues) {
     const i = issue as unknown as { type: string; key?: string; title: string; description?: string; project?: { key: string } };
     const projKey = i.project && typeof i.project === 'object' && 'key' in i.project ? (i.project as { key: string }).key : '';
     const key = i.key ?? (projKey ? `${projKey}-${String(issue._id).slice(-6)}` : String(issue._id).slice(-8));
     const typeName = i.type ?? 'Task';
-    const desc = (i.description ?? '').trim().replace(/\r?\n/g, ' ').replace(/\|/g, ', ').slice(0, 200);
+    const desc = plainTextForMarkdownCell(i.description ?? '');
     if (!byType[typeName]) byType[typeName] = [];
     byType[typeName].push({ key, title: i.title, description: desc });
   }
@@ -383,7 +614,8 @@ export async function releaseVersionToEnvironment(
   const now = new Date();
   const projectName = (rawProject as { name?: string }).name ?? 'Project';
   const releasedAtFormatted = now.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-  let releaseNotes = `# Release ${version.name} → ${env.name}\n\n`;
+  const actionLabel = promoteRelease ? 'Promotion' : 'Release';
+  let releaseNotes = `# ${actionLabel} ${version.name} → ${env.name}\n\n`;
   releaseNotes += `**Project:** ${projectName}\n\n`;
   releaseNotes += `**Release date & time:** ${releasedAtFormatted}\n\n`;
   releaseNotes += `*Issues in this release have been updated.*\n\n`;
@@ -394,13 +626,17 @@ export async function releaseVersionToEnvironment(
     releaseNotes += `| Id | Name | Description |\n| --- | --- | --- |\n`;
     for (const item of items) {
       const esc = (s: string) => s.replace(/\|/g, ', ');
-      releaseNotes += `| ${esc(item.key)} | ${esc(item.title)} | ${esc(item.description)} |\n`;
+      // Bold issue id so the reader can render it as a link to the issue; name/description stay plain.
+      releaseNotes += `| **${esc(item.key)}** | ${esc(item.title)} | ${esc(item.description)} |\n`;
     }
     releaseNotes += '\n';
   }
 
   const nowIso = now.toISOString();
-  const raw = await Project.findById(projectId).lean();
+  const raw = await Project.findOne({
+    _id: projectId,
+    taskflowOrganizationId: activeTaskflowOrganizationId,
+  }).lean();
   if (!raw) throw new ApiError(404, 'Project not found');
   const versions = (raw as unknown as { versions: Array<Record<string, unknown>> }).versions.map((v) => {
     if (v.id !== versionId) return v;
@@ -410,29 +646,35 @@ export async function releaseVersionToEnvironment(
     notes[environmentId] = releaseNotes;
     return { ...v, status: 'released', releasedAtByEnvironment: releasedAt, releaseNotesByEnvironment: notes };
   });
-  await Project.findByIdAndUpdate(projectId, { $set: { versions } });
-  const updatedProject = await Project.findById(projectId).populate('lead', 'name email').lean();
+  await Project.findOneAndUpdate(
+    { _id: projectId, taskflowOrganizationId: activeTaskflowOrganizationId },
+    { $set: { versions } }
+  );
+  const updatedProject = await Project.findOne({
+    _id: projectId,
+    taskflowOrganizationId: activeTaskflowOrganizationId,
+  })
+    .populate('lead', 'name email')
+    .lean();
   const versionsList = (updatedProject as unknown as { versions?: Array<{ id: string }> })?.versions;
   const updatedVersion = versionsList?.find((v) => v.id === versionId) ?? version;
   const issueCount = await Issue.countDocuments({ project: projectId, fixVersion: versionId });
 
-  // Inbox: release notes (major info) - notify configured users or all project members
-  const ruleWithNotify = rule as { notifyUserIds?: string[] };
-  let userIdsToNotify: string[] = Array.isArray(ruleWithNotify.notifyUserIds)
-    ? ruleWithNotify.notifyUserIds
-    : await ProjectMember.find({ project: projectId }).distinct('user').then((ids) => ids.map((id) => String(id)));
-  userIdsToNotify = [...new Set(userIdsToNotify)];
   const releaseTitle = `Release: ${version.name} → ${env.name}`;
-  const releaseBody = `Version ${version.name} has been released to ${env.name}. ${issues.length} issue(s) updated.`;
-  for (const uid of userIdsToNotify) {
-    inboxService.createMessage({
-      toUser: uid,
-      type: 'release_notes',
-      title: releaseTitle,
-      body: releaseBody,
-      meta: { projectId, versionId, versionName: version.name, environmentId, environmentName: env.name, issueCount: issues.length },
-    }).catch((err) => console.error('Inbox release notification failed:', err));
-  }
+  releaseNotificationService
+    .dispatchReleaseNotifications({
+      projectId,
+      rule: rule as IProjectReleaseRule,
+      releaseTitle,
+      releaseNotesMarkdown: releaseNotes,
+      versionName: version.name,
+      environmentName: env.name,
+      projectName,
+      releasedAtFormatted,
+      issueCount: issues.length,
+      promoteRelease,
+    })
+    .catch((err) => console.error('Release notifications failed:', err));
 
   return {
     releaseNotes,

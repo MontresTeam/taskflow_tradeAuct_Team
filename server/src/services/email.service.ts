@@ -66,7 +66,6 @@ async function getGraphAccessToken(): Promise<string> {
 
 async function sendViaGraph(to: string, subject: string, html: string): Promise<void> {
   const accessToken = await getGraphAccessToken();
-  console.log('accessToken', accessToken);
   const fromEmail = env.azureGraphFromEmail;
 
   const payload = {
@@ -97,23 +96,45 @@ async function sendViaGraph(to: string, subject: string, html: string): Promise<
   }
 }
 
+async function sendViaSendgrid(to: string, subject: string, html: string): Promise<void> {
+  const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.sendgridApiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: { email: env.sendgridFromEmail || env.mailFrom },
+      personalizations: [{ to: [{ email: to }] }],
+      subject,
+      content: [{ type: 'text/html', value: html }],
+    }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`[email] SendGrid send failed [${response.status}]: ${errorText}`);
+  }
+}
+
 // ── Unified dispatcher ────────────────────────────────────────────────────────
 
 async function sendEmail(to: string, subject: string, html: string): Promise<void> {
-  console.log('sendEmail', to, subject, html);
-  const { isSmtpEnabled, isAzureGraphEnabled } = env;
+  const { isSmtpEnabled, isAzureGraphEnabled, isSendgridEnabled } = env;
 
-  if (isSmtpEnabled && isAzureGraphEnabled) {
-    console.warn('[email] Both IS_SMTP_ENABLED and IS_AZURE_GRAPH_ENABLED are true — SMTP takes precedence.');
+  if ((isSmtpEnabled ? 1 : 0) + (isAzureGraphEnabled ? 1 : 0) + (isSendgridEnabled ? 1 : 0) > 1) {
+    console.warn(
+      '[email] Multiple transports enabled (SMTP/AzureGraph/SendGrid) — priority: SMTP > Azure Graph > SendGrid.'
+    );
   }
 
-  if (!isSmtpEnabled && !isAzureGraphEnabled) {
-    console.warn('[email] No transport enabled (IS_SMTP_ENABLED, IS_AZURE_GRAPH_ENABLED). Email skipped.');
+  if (!isSmtpEnabled && !isAzureGraphEnabled && !isSendgridEnabled) {
+    console.warn('[email] No transport enabled (IS_SMTP_ENABLED, IS_AZURE_GRAPH_ENABLED, IS_SENDGRID_ENABLED). Email skipped.');
     return;
   }
 
   if (isSmtpEnabled) return sendViaSMTP(to, subject, html);
-  return sendViaGraph(to, subject, html);
+  if (isAzureGraphEnabled) return sendViaGraph(to, subject, html);
+  return sendViaSendgrid(to, subject, html);
 }
 
 export interface InviteEmailParams {
@@ -151,24 +172,15 @@ export interface ForgotPasswordEmailParams {
 
 export function renderForgotPasswordEmail(params: ForgotPasswordEmailParams): string {
   const { name, resetLink } = params;
-  return `
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Reset your password</title></head>
-<body style="font-family: system-ui, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-  <h2 style="color: #4f46e5;">Reset your TaskFlow password</h2>
-  <p>Hi ${escapeHtml(name)},</p>
-  <p>You requested a password reset. Click the link below to set a new password:</p>
-  <p><a href="${escapeHtml(resetLink)}" style="color: #4f46e5;">Reset password</a></p>
-  <p>If you didn't request this, you can ignore this email.</p>
-  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
-  <p style="font-size: 12px; color: #64748b;">This link will expire in 1 hour.</p>
-</body>
-</html>
-  `.trim();
+  const inner = `${tfHeading('Reset your TaskFlow password', 'You requested a password reset.')}
+  <p style="margin:0 0 12px; color:#475569; font-size:14px;">Hi ${escapeHtml(name)},</p>
+  <p style="margin:0 0 16px; color:#475569; font-size:14px;">Click the button below to choose a new password. This link expires in 1 hour.</p>
+  ${tfCta(resetLink, 'Reset password')}
+  <p style="margin:16px 0 0; color:#64748b; font-size:13px;">If you did not request this, you can ignore this email. Your password will stay the same.</p>`;
+  return tfEmailWrap(inner, 'indigo');
 }
 
-function escapeHtml(s: string): string {
+export function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -176,8 +188,153 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
+// ── Shared HTML layout (TaskFlow + Customer Portal) ─────────────────────────
+
+export type EmailAccent = 'indigo' | 'green' | 'red';
+
+export function tfDetailTable(rows: { label: string; value: string }[]): string {
+  const body = rows
+    .map(
+      (r) => `
+    <tr>
+      <td style="padding:10px 14px;border:1px solid #e2e8f0;background:#f1f5f9;color:#64748b;font-size:12px;font-weight:600;vertical-align:top;width:34%;">${escapeHtml(r.label)}</td>
+      <td style="padding:10px 14px;border:1px solid #e2e8f0;font-size:14px;color:#0f172a;vertical-align:top;line-height:1.5;">${
+        r.value ? escapeHtml(r.value) : '—'
+      }</td>
+    </tr>`
+    )
+    .join('');
+  return `<table role="presentation" style="width:100%;border-collapse:collapse;border-radius:10px;overflow:hidden;margin:18px 0;">${body}</table>`;
+}
+
+export function tfCta(url: string, label: string): string {
+  return `<p style="margin:20px 0 8px 0;">
+  <a href="${escapeHtml(url)}" style="display:inline-block;background:#4f46e5;color:#fff !important;text-decoration:none;padding:12px 22px;border-radius:10px;font-weight:600;font-size:14px;box-shadow:0 2px 6px rgba(79,70,229,0.35);">${escapeHtml(label)}</a>
+</p>
+<p style="font-size:12px;color:#64748b;margin:0;">or copy: <a href="${escapeHtml(url)}" style="color:#4f46e5;word-break:break-all;">${escapeHtml(url)}</a></p>`;
+}
+
+export function tfNextStepsBox(title: string, lines: string[]): string {
+  if (lines.length === 0) return '';
+  const items = lines
+    .map(
+      (line) => `<li style="margin:0 0 6px 0; padding-left:2px; line-height:1.5;">${escapeHtml(line)}</li>`
+    )
+    .join('');
+  return `<div style="background:linear-gradient(180deg,#f8fafc 0%,#f1f5f9 100%);border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin:20px 0;">
+  <p style="margin:0 0 8px 0; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; color:#475569;">${escapeHtml(title)}</p>
+  <ul style="margin:0; padding-left:18px; color:#334155; font-size:14px;">${items}</ul>
+</div>`;
+}
+
+export function tfEmailWrap(inner: string, accent: EmailAccent = 'indigo'): string {
+  const top =
+    accent === 'green'
+      ? 'linear-gradient(90deg, #16a34a, #22c55e)'
+      : accent === 'red'
+        ? 'linear-gradient(90deg, #b91c1c, #ef4444)'
+        : 'linear-gradient(90deg, #4f46e5, #7c3aed)';
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width" /></head>
+<body style="margin:0;padding:0;background:#f1f5f9;">
+  <div style="max-width:600px;margin:0 auto;padding:24px 16px 40px;font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;">
+    <div style="background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(15,23,42,0.08);border:1px solid #e2e8f0;">
+      <div style="height:5px;background:${top};"></div>
+      <div style="padding:28px 24px 32px; color:#0f172a; line-height:1.6;">
+        ${inner}
+        <p style="margin:28px 0 0; padding-top:20px; border-top:1px solid #e2e8f0; font-size:12px; color:#64748b;">This is an automated message from TaskFlow. Please do not reply to this email.</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+function tfHeading(title: string, subtitle?: string): string {
+  const sub = subtitle
+    ? `<p style="margin:0 0 16px; color:#475569; font-size:14px;">${escapeHtml(subtitle)}</p>`
+    : '';
+  return `<p style="font-size:16px; font-weight:600; margin:0 0 8px; color:#0f172a;">${escapeHtml(title)}</p>${sub}`;
+}
+
+function tfActorLine(prefix: string, actorName?: string): string {
+  if (!actorName) return '';
+  return `<p style="margin:0 0 12px; color:#64748b; font-size:14px;">${escapeHtml(prefix)} <strong>${escapeHtml(actorName)}</strong></p>`;
+}
+
+function tfExcerptBlock(label: string, text: string): string {
+  if (!text.trim()) return '';
+  return `<div style="border-left:4px solid #4f46e5;padding:10px 14px;margin:16px 0;background:#eef2ff;border-radius:0 8px 8px 0;">
+    <p style="margin:0; font-size:12px; font-weight:600; color:#4338ca;">${escapeHtml(label)}</p>
+    <p style="margin:6px 0 0; font-size:14px; color:#312e81; white-space:pre-wrap;">${escapeHtml(text.trim())}</p>
+  </div>`;
+}
+
+function formatChangeValue(v: unknown): string {
+  if (v == null || v === '') return '—';
+  return String(v);
+}
+
+function issueDetailRows(params: {
+  issueKey: string;
+  title: string;
+  type?: string;
+  status?: string;
+  statusTransition?: string;
+  assigneeName?: string;
+  projectName?: string;
+}): { label: string; value: string }[] {
+  const rows: { label: string; value: string }[] = [
+    { label: 'Issue', value: params.issueKey },
+    { label: 'Title', value: params.title },
+  ];
+  if (params.type) rows.push({ label: 'Type', value: params.type });
+  if (params.statusTransition) rows.push({ label: 'Status', value: params.statusTransition });
+  else if (params.status) rows.push({ label: 'Status', value: params.status });
+  if (params.assigneeName) rows.push({ label: 'Assignee', value: params.assigneeName });
+  if (params.projectName) rows.push({ label: 'Project', value: params.projectName });
+  return rows;
+}
+
 export async function sendInviteEmail(params: InviteEmailParams): Promise<void> {
   await sendEmail(params.email, 'Your TaskFlow account', renderInviteEmail(params));
+}
+
+export interface WorkspaceJoinInviteEmailParams {
+  inviteeName: string;
+  email: string;
+  workspaceName: string;
+  inviterName: string;
+  appUrl: string;
+}
+
+export function renderWorkspaceJoinInviteEmail(params: WorkspaceJoinInviteEmailParams): string {
+  const { inviteeName, workspaceName, inviterName, appUrl } = params;
+  const loginUrl = `${appUrl.replace(/\/$/, '')}/login`;
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Workspace invitation</title></head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+  <h2 style="color: #4f46e5;">You’ve been added to a workspace</h2>
+  <p>Hi ${escapeHtml(inviteeName)},</p>
+  <p>${escapeHtml(inviterName)} added you to the workspace <strong>${escapeHtml(workspaceName)}</strong> in TaskFlow.</p>
+  <p>Sign in with your existing account — no new password was created for you.</p>
+  <p><a href="${escapeHtml(loginUrl)}" style="color: #4f46e5;">Open TaskFlow</a></p>
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
+  <p style="font-size: 12px; color: #64748b;">This is an automated message. Do not reply.</p>
+</body>
+</html>
+  `.trim();
+}
+
+export async function sendWorkspaceJoinInviteEmail(params: WorkspaceJoinInviteEmailParams): Promise<void> {
+  await sendEmail(
+    params.email,
+    `TaskFlow: Join workspace ${params.workspaceName}`,
+    renderWorkspaceJoinInviteEmail(params)
+  );
 }
 
 export async function sendForgotPasswordEmail(to: string, params: ForgotPasswordEmailParams): Promise<void> {
@@ -188,61 +345,226 @@ export interface ProjectInviteEmailParams {
   projectName: string;
   inviterName: string;
   appUrl: string;
+  roleName?: string;
 }
 
 export function renderProjectInviteEmail(params: ProjectInviteEmailParams): string {
-  const { projectName, inviterName, appUrl } = params;
-  const inboxUrl = `${appUrl}/inbox`;
-  return `
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Project invitation</title></head>
-<body style="font-family: system-ui, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-  <h2 style="color: #4f46e5;">Project invitation</h2>
-  <p>You've been invited to the project <strong>${escapeHtml(projectName)}</strong> by ${escapeHtml(inviterName)}.</p>
-  <p>Open your inbox in TaskFlow to accept or decline the invitation.</p>
-  <p><a href="${escapeHtml(inboxUrl)}" style="color: #4f46e5;">Open inbox</a></p>
-  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
-  <p style="font-size: 12px; color: #64748b;">This is an automated message. Do not reply.</p>
-</body>
-</html>
-  `.trim();
+  const { projectName, inviterName, appUrl, roleName } = params;
+  const inboxUrl = `${appUrl.replace(/\/$/, '')}/inbox`;
+  const rows: { label: string; value: string }[] = [
+    { label: 'Project', value: projectName },
+    { label: 'Invited by', value: inviterName },
+  ];
+  if (roleName) rows.push({ label: 'Role', value: roleName });
+  const inner = `${tfHeading('Project invitation', 'You have been invited to collaborate on a project in TaskFlow.')}
+${tfDetailTable(rows)}
+${tfNextStepsBox('What to do next', [
+  'Open your TaskFlow inbox to accept or decline this invitation.',
+  'Once accepted, you will see the project in your workspace.',
+])}
+${tfCta(inboxUrl, 'Open inbox')}`;
+  return tfEmailWrap(inner, 'indigo');
 }
 
 export async function sendProjectInviteEmail(to: string, params: ProjectInviteEmailParams): Promise<void> {
   await sendEmail(to, `Project invitation: ${params.projectName}`, renderProjectInviteEmail(params));
 }
 
-export interface WatcherNotificationParams {
-  type: string;
-  title: string;
-  body?: string;
+// ── Customer Portal request emails (shared layout) ─────────────────────────
+
+const crDetailTable = tfDetailTable;
+const crCtaBlock = tfCta;
+const crNextStepsBox = tfNextStepsBox;
+const crBodyWrap = tfEmailWrap;
+
+export interface CustomerRequestSubmittedParams {
+  requesterName: string;
+  requestTitle: string;
+  orgName: string;
+  appUrl: string;
+  requestId: string;
+  projectLabel: string;
+  typeLabel: string;
+  priorityLabel: string;
+  /** What happens next (org admin path vs direct to TaskFlow) */
+  routingMessage: string;
+}
+
+export function renderCustomerRequestSubmittedEmail(p: CustomerRequestSubmittedParams): string {
+  const detailUrl = `${p.appUrl}/portal/requests/${p.requestId}`;
+  const inner = `<p style="font-size:15px; margin:0 0 8px; color:#334155;">Hi ${escapeHtml(p.requesterName)},</p>
+<p style="font-size:16px; font-weight:600; margin:0 0 16px; color:#0f172a;">We’ve received your request and pulled it into the queue.</p>
+<p style="margin:0 0 4px; color:#475569; font-size:14px;">You’ll get another email when the status changes. Here’s a snapshot of what you sent:</p>
+${crDetailTable([
+  { label: 'Title', value: p.requestTitle },
+  { label: 'Organisation', value: p.orgName },
+  { label: 'Project', value: p.projectLabel },
+  { label: 'Type', value: p.typeLabel },
+  { label: 'Priority', value: p.priorityLabel },
+])}
+${crNextStepsBox('What happens next', [p.routingMessage, 'You can add comments and track every step in the customer portal.'])}
+${crCtaBlock(detailUrl, 'View request in portal')}`;
+  return crBodyWrap(inner, 'indigo');
+}
+
+export interface CustomerRequestApprovedByOrgParams {
+  requesterName: string;
+  requestTitle: string;
+  orgName: string;
+  appUrl: string;
+  requestId: string;
+  projectLabel: string;
+  typeLabel: string;
+  priorityLabel: string;
+  reviewerName: string;
+  adminNote?: string;
+}
+
+export function renderCustomerRequestApprovedByOrgAdminEmail(p: CustomerRequestApprovedByOrgParams): string {
+  const detailUrl = `${p.appUrl}/portal/requests/${p.requestId}`;
+  const noteBlock =
+    p.adminNote && p.adminNote.trim()
+      ? `<div style="border-left:4px solid #4f46e5;padding:10px 14px;margin:16px 0;background:#eef2ff;border-radius:0 8px 8px 0;">
+        <p style="margin:0; font-size:12px; font-weight:600; color:#4338ca;">Note from your organisation</p>
+        <p style="margin:6px 0 0; font-size:14px; color:#312e81; white-space:pre-wrap;">${escapeHtml(p.adminNote.trim())}</p>
+      </div>`
+      : '';
+  const inner = `<p style="font-size:15px; margin:0 0 8px; color:#334155;">Hi ${escapeHtml(p.requesterName)},</p>
+<p style="font-size:16px; font-weight:600; margin:0 0 12px; color:#16a34a;">Your organisation has approved this request</p>
+<p style="margin:0 0 16px; color:#475569; font-size:14px;">It’s been forwarded to the <strong>TaskFlow</strong> team for technical review. You don’t need to do anything for now — we’ll notify you if we need more information or when work begins.</p>
+${crDetailTable([
+  { label: 'Title', value: p.requestTitle },
+  { label: 'Organisation', value: p.orgName },
+  { label: 'Project', value: p.projectLabel },
+  { label: 'Type / Priority', value: `${p.typeLabel} · ${p.priorityLabel}` },
+  { label: 'Approved by', value: p.reviewerName },
+])}
+${noteBlock}
+${crNextStepsBox('What happens next', [
+  'TaskFlow reviewers will accept or decline the work based on scope and capacity.',
+  'If accepted, a ticket is created in the project and you’ll receive the ticket key by email.',
+])}
+${crCtaBlock(detailUrl, 'Open request in portal')}`;
+  return crBodyWrap(inner, 'green');
+}
+
+export interface CustomerRequestRejectedByOrgParams {
+  requesterName: string;
+  requestTitle: string;
+  orgName: string;
+  appUrl: string;
+  requestId: string;
+  projectLabel: string;
+  typeLabel: string;
+  priorityLabel: string;
+  reason: string;
+  adminNote?: string;
+}
+
+export function renderCustomerRequestRejectedEmail(p: CustomerRequestRejectedByOrgParams): string {
+  const listUrl = `${p.appUrl}/portal/requests`;
+  const reasonBlock = p.reason.trim()
+    ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:14px 16px;margin:16px 0;">
+        <p style="margin:0; font-size:12px; font-weight:700; text-transform:uppercase; color:#b91c1c;">Reason provided</p>
+        <p style="margin:8px 0 0; font-size:14px; color:#7f1d1d; white-space:pre-wrap;">${escapeHtml(p.reason.trim())}</p>
+      </div>`
+    : '';
+  const noteBlock =
+    p.adminNote && p.adminNote.trim()
+      ? `<p style="margin:12px 0 0; font-size:13px; color:#64748b;"><strong>Additional note:</strong> ${escapeHtml(
+          p.adminNote.trim()
+        )}</p>`
+      : '';
+  const inner = `<p style="font-size:15px; margin:0 0 8px; color:#334155;">Hi ${escapeHtml(p.requesterName)},</p>
+<p style="font-size:16px; font-weight:600; margin:0 0 12px; color:#b91c1c;">This request was not approved at your organisation</p>
+<p style="margin:0 0 16px; color:#475569; font-size:14px;">Your organisation admin decided not to send this to TaskFlow. You can submit a new request with more detail, or ask your admin if you have questions about this decision.</p>
+${crDetailTable([
+  { label: 'Request', value: p.requestTitle },
+  { label: 'Project', value: p.projectLabel },
+  { label: 'Type / Priority', value: `${p.typeLabel} · ${p.priorityLabel}` },
+  { label: 'Organisation', value: p.orgName },
+])}
+${reasonBlock}
+${noteBlock}
+${crCtaBlock(listUrl, 'View all your requests')}`;
+  return crBodyWrap(inner, 'red');
+}
+
+export interface CustomerTicketCreatedEmailParams {
+  recipientName: string;
+  requestTitle: string;
   issueKey: string;
-  issueUrl: string;
+  orgName: string;
+  appUrl: string;
+  requestId: string;
+  projectLabel: string;
+  typeLabel: string;
+  priorityLabel: string;
 }
 
-export function renderWatcherNotificationEmail(params: WatcherNotificationParams): string {
-  const { title, body, issueUrl } = params;
-  return `
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head>
-<body style="font-family: system-ui, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-  <h2 style="color: #4f46e5;">${escapeHtml(title)}</h2>
-  ${body ? `<p>${escapeHtml(body)}</p>` : ''}
-  <p><a href="${escapeHtml(issueUrl)}" style="color: #4f46e5;">View issue</a></p>
-  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
-  <p style="font-size: 12px; color: #64748b;">This is an automated message. Do not reply.</p>
-</body>
-</html>
-  `.trim();
+export function renderTicketCreatedEmail(p: CustomerTicketCreatedEmailParams): string {
+  const detailUrl = `${p.appUrl}/portal/requests/${p.requestId}`;
+  const inner = `<p style="font-size:15px; margin:0 0 8px; color:#334155;">Hi ${escapeHtml(p.recipientName)},</p>
+<p style="font-size:16px; font-weight:600; margin:0 0 12px; color:#16a34a;">Your work is officially on the board</p>
+<p style="margin:0 0 16px; color:#475569; font-size:14px;">TaskFlow approved your request and created a <strong>ticket</strong> in the project. The team can track, estimate, and discuss it with the same tools they use for all internal work.</p>
+${crDetailTable([
+  { label: 'Ticket', value: p.issueKey },
+  { label: 'From request', value: p.requestTitle },
+  { label: 'Project', value: p.projectLabel },
+  { label: 'Type / Priority', value: `${p.typeLabel} · ${p.priorityLabel}` },
+  { label: 'Organisation', value: p.orgName },
+])}
+${crNextStepsBox('What you can do', [
+  'Watch this request in the portal for status updates and comments from the team.',
+  'You can add portal comments; mention @issue if a comment should sync to the ticket for engineers.',
+])}
+${crCtaBlock(detailUrl, 'View request in portal')}`;
+  return crBodyWrap(inner, 'green');
 }
 
-export async function sendWatcherNotificationEmail(to: string, params: WatcherNotificationParams): Promise<void> {
-  await sendEmail(to, params.title, renderWatcherNotificationEmail(params));
+export interface CustomerTfRejectedEmailParams {
+  requesterName: string;
+  requestTitle: string;
+  orgName: string;
+  appUrl: string;
+  requestId: string;
+  projectLabel: string;
+  typeLabel: string;
+  priorityLabel: string;
+  reason: string;
+  teamNote?: string;
 }
 
-// ── Customer Portal Email Templates ──────────────────────────────────────────
+export function renderTfRejectedEmail(p: CustomerTfRejectedEmailParams): string {
+  const listUrl = `${p.appUrl}/portal/requests`;
+  const teamNoteBlock =
+    p.teamNote && p.teamNote.trim()
+      ? `<p style="margin:14px 0 0; font-size:14px; color:#334155; white-space:pre-wrap; border-left:3px solid #e2e8f0; padding-left:12px;">${escapeHtml(
+          p.teamNote.trim()
+        )}</p>`
+      : '';
+  const reasonBlock = p.reason.trim()
+    ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:14px 16px;margin:16px 0;">
+        <p style="margin:0; font-size:12px; font-weight:700; text-transform:uppercase; color:#b91c1c;">Decline reason</p>
+        <p style="margin:8px 0 0; font-size:14px; color:#7f1d1d; white-space:pre-wrap;">${escapeHtml(p.reason.trim())}</p>
+      </div>`
+    : '';
+  const inner = `<p style="font-size:15px; margin:0 0 8px; color:#334155;">Hi ${escapeHtml(p.requesterName)},</p>
+<p style="font-size:16px; font-weight:600; margin:0 0 12px; color:#b91c1c;">The TaskFlow team could not take this request forward</p>
+<p style="margin:0 0 16px; color:#475569; font-size:14px;">This isn’t a reflection on you — the team may decline when work is out of scope, duplicates existing effort, or can’t be scheduled right now. You can refine the description and try again, or work with your organisation on another approach.</p>
+${crDetailTable([
+  { label: 'Request', value: p.requestTitle },
+  { label: 'Project', value: p.projectLabel },
+  { label: 'Type / Priority', value: `${p.typeLabel} · ${p.priorityLabel}` },
+  { label: 'Organisation', value: p.orgName },
+])}
+${reasonBlock}
+${teamNoteBlock}
+${crCtaBlock(listUrl, 'Back to your requests')}`;
+  return crBodyWrap(inner, 'red');
+}
+
+// ── Customer Portal Email Templates (invites) ────────────────────────────────
 
 export function renderCustomerOrgAdminInviteEmail(
   name: string,
@@ -294,120 +616,209 @@ export function renderCustomerMemberInviteEmail(
   `.trim();
 }
 
-export function renderCustomerRequestSubmittedEmail(
-  requesterName: string,
-  requestTitle: string,
-  orgName: string,
-  appUrl: string
-): string {
-  return `
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Request Submitted</title></head>
-<body style="font-family: system-ui, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-  <h2 style="color: #4f46e5;">Request Submitted</h2>
-  <p>Hi ${escapeHtml(requesterName)},</p>
-  <p>Your request <strong>${escapeHtml(requestTitle)}</strong> has been submitted to <strong>${escapeHtml(orgName)}</strong> and is pending approval.</p>
-  <p><a href="${escapeHtml(appUrl)}/portal/requests" style="color: #4f46e5;">View your requests</a></p>
-  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
-  <p style="font-size: 12px; color: #64748b;">This is an automated message. Do not reply.</p>
-</body>
-</html>
-  `.trim();
+export interface IssueAssignedEmailParams {
+  issueKey: string;
+  title: string;
+  type: string;
+  status: string;
+  assigneeName?: string;
+  projectName?: string;
+  issueUrl: string;
+  changedByName?: string;
 }
 
-export function renderCustomerRequestApprovedByOrgAdminEmail(
-  requesterName: string,
-  requestTitle: string,
-  orgName: string,
-  appUrl: string
-): string {
-  return `
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Request Approved</title></head>
-<body style="font-family: system-ui, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-  <h2 style="color: #4f46e5;">Request Approved by Org Admin</h2>
-  <p>Hi ${escapeHtml(requesterName)},</p>
-  <p>Your request <strong>${escapeHtml(requestTitle)}</strong> from <strong>${escapeHtml(orgName)}</strong> has been approved by your organization admin and is now pending TaskFlow review.</p>
-  <p><a href="${escapeHtml(appUrl)}/portal/requests" style="color: #4f46e5;">View your requests</a></p>
-  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
-  <p style="font-size: 12px; color: #64748b;">This is an automated message. Do not reply.</p>
-</body>
-</html>
-  `.trim();
+export function renderIssueAssignedEmail(params: IssueAssignedEmailParams): string {
+  const { issueKey, title, type, status, assigneeName, projectName, issueUrl, changedByName } = params;
+  const inner = `${tfHeading('Issue assigned to you')}
+${tfActorLine('Assigned by', changedByName)}
+${tfDetailTable(
+  issueDetailRows({ issueKey, title, type, status, assigneeName, projectName })
+)}
+${tfCta(issueUrl, 'Open issue')}`;
+  return tfEmailWrap(inner, 'indigo');
 }
 
-export function renderCustomerRequestRejectedEmail(
-  requesterName: string,
-  requestTitle: string,
-  reason: string,
-  orgName: string,
-  appUrl: string
-): string {
-  return `
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Request Rejected</title></head>
-<body style="font-family: system-ui, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-  <h2 style="color: #ef4444;">Request Rejected</h2>
-  <p>Hi ${escapeHtml(requesterName)},</p>
-  <p>Your request <strong>${escapeHtml(requestTitle)}</strong> from <strong>${escapeHtml(orgName)}</strong> has been rejected.</p>
-  ${reason ? `<p><strong>Reason:</strong> ${escapeHtml(reason)}</p>` : ''}
-  <p><a href="${escapeHtml(appUrl)}/portal/requests" style="color: #4f46e5;">View your requests</a></p>
-  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
-  <p style="font-size: 12px; color: #64748b;">This is an automated message. Do not reply.</p>
-</body>
-</html>
-  `.trim();
+export interface IssueUnassignedEmailParams {
+  issueKey: string;
+  title: string;
+  type: string;
+  status: string;
+  projectName?: string;
+  issueUrl: string;
+  changedByName?: string;
 }
 
-export function renderTicketCreatedEmail(
-  requesterName: string,
-  requestTitle: string,
-  issueKey: string,
-  orgName: string,
-  appUrl: string
-): string {
-  return `
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Ticket Created</title></head>
-<body style="font-family: system-ui, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-  <h2 style="color: #22c55e;">Ticket Created: ${escapeHtml(issueKey)}</h2>
-  <p>Hi ${escapeHtml(requesterName)},</p>
-  <p>Your request <strong>${escapeHtml(requestTitle)}</strong> from <strong>${escapeHtml(orgName)}</strong> has been approved and a ticket has been created: <strong>${escapeHtml(issueKey)}</strong>.</p>
-  <p>Our team will begin working on it shortly.</p>
-  <p><a href="${escapeHtml(appUrl)}/portal/requests" style="color: #4f46e5;">View your requests</a></p>
-  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
-  <p style="font-size: 12px; color: #64748b;">This is an automated message. Do not reply.</p>
-</body>
-</html>
-  `.trim();
+export function renderIssueUnassignedEmail(params: IssueUnassignedEmailParams): string {
+  const { issueKey, title, type, status, projectName, issueUrl, changedByName } = params;
+  const inner = `${tfHeading('Issue unassigned from you')}
+${tfActorLine('Unassigned by', changedByName)}
+${tfDetailTable(issueDetailRows({ issueKey, title, type, status, projectName }))}
+${tfCta(issueUrl, 'Open issue')}`;
+  return tfEmailWrap(inner, 'indigo');
 }
 
-export function renderTfRejectedEmail(
-  requesterName: string,
-  requestTitle: string,
-  reason: string,
-  orgName: string,
-  appUrl: string
-): string {
-  return `
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Request Declined</title></head>
-<body style="font-family: system-ui, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-  <h2 style="color: #ef4444;">Request Declined by TaskFlow</h2>
-  <p>Hi ${escapeHtml(requesterName)},</p>
-  <p>Your request <strong>${escapeHtml(requestTitle)}</strong> from <strong>${escapeHtml(orgName)}</strong> has been declined by the TaskFlow team.</p>
-  ${reason ? `<p><strong>Reason:</strong> ${escapeHtml(reason)}</p>` : ''}
-  <p><a href="${escapeHtml(appUrl)}/portal/requests" style="color: #4f46e5;">View your requests</a></p>
-  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
-  <p style="font-size: 12px; color: #64748b;">This is an automated message. Do not reply.</p>
-</body>
-</html>
-  `.trim();
+export interface IssueStatusChangedEmailParams {
+  issueKey: string;
+  title: string;
+  type: string;
+  fromStatus: string;
+  toStatus: string;
+  assigneeName?: string;
+  issueUrl: string;
+  changedByName?: string;
+}
+
+export function renderIssueStatusChangedEmail(params: IssueStatusChangedEmailParams): string {
+  const { issueKey, title, type, fromStatus, toStatus, assigneeName, issueUrl, changedByName } = params;
+  const inner = `${tfHeading('Issue status changed')}
+${tfActorLine('Updated by', changedByName)}
+${tfDetailTable(
+  issueDetailRows({
+    issueKey,
+    title,
+    type,
+    statusTransition: `${fromStatus} → ${toStatus}`,
+    assigneeName,
+  })
+)}
+${tfCta(issueUrl, 'Open issue')}`;
+  return tfEmailWrap(inner, 'indigo');
+}
+
+export interface TaskMentionedEmailParams {
+  issueKey: string;
+  issueTitle: string;
+  projectName?: string;
+  authorName?: string;
+  commentExcerpt: string;
+  issueUrl: string;
+}
+
+export function renderTaskMentionedEmail(params: TaskMentionedEmailParams): string {
+  const { issueKey, issueTitle, projectName, authorName, commentExcerpt, issueUrl } = params;
+  const inner = `${tfHeading('You were mentioned in a comment')}
+${tfActorLine('Mentioned by', authorName)}
+${tfDetailTable(
+  issueDetailRows({ issueKey, title: issueTitle, projectName })
+)}
+${tfExcerptBlock('Comment', commentExcerpt)}
+${tfCta(issueUrl, 'View comment')}`;
+  return tfEmailWrap(inner, 'indigo');
+}
+
+export interface WatchCommentEmailParams {
+  issueKey: string;
+  issueTitle: string;
+  projectName?: string;
+  authorName?: string;
+  commentExcerpt: string;
+  issueUrl: string;
+}
+
+export function renderWatchCommentEmail(params: WatchCommentEmailParams): string {
+  const { issueKey, issueTitle, projectName, authorName, commentExcerpt, issueUrl } = params;
+  const inner = `${tfHeading('New comment on watched issue')}
+${tfActorLine('Comment by', authorName)}
+${tfDetailTable(issueDetailRows({ issueKey, title: issueTitle, projectName }))}
+${tfExcerptBlock('Comment', commentExcerpt)}
+${tfCta(issueUrl, 'Open issue')}`;
+  return tfEmailWrap(inner, 'indigo');
+}
+
+export interface WatchStatusEmailParams {
+  issueKey: string;
+  issueTitle: string;
+  projectName?: string;
+  fromStatus: string;
+  toStatus: string;
+  actorName?: string;
+  issueUrl: string;
+}
+
+export function renderWatchStatusEmail(params: WatchStatusEmailParams): string {
+  const { issueKey, issueTitle, projectName, fromStatus, toStatus, actorName, issueUrl } = params;
+  const inner = `${tfHeading('Status changed on watched issue')}
+${tfActorLine('Updated by', actorName)}
+${tfDetailTable(
+  issueDetailRows({
+    issueKey,
+    title: issueTitle,
+    projectName,
+    statusTransition: `${fromStatus} → ${toStatus}`,
+  })
+)}
+${tfCta(issueUrl, 'Open issue')}`;
+  return tfEmailWrap(inner, 'indigo');
+}
+
+export interface FieldChangeRow {
+  field: string;
+  from?: unknown;
+  to?: unknown;
+}
+
+export interface WatchFieldEmailParams {
+  issueKey: string;
+  issueTitle: string;
+  projectName?: string;
+  changes: FieldChangeRow[];
+  actorName?: string;
+  issueUrl: string;
+  summary?: string;
+}
+
+export interface ReleaseDeployedEmailParams {
+  versionName: string;
+  environmentName: string;
+  projectName: string;
+  releasedAt: string;
+  issueCount: number;
+  actionLabel: 'Release' | 'Promotion';
+  versionsUrl: string;
+  releasedByName?: string;
+}
+
+export function renderReleaseDeployedEmail(params: ReleaseDeployedEmailParams): string {
+  const {
+    versionName,
+    environmentName,
+    projectName,
+    releasedAt,
+    issueCount,
+    actionLabel,
+    versionsUrl,
+    releasedByName,
+  } = params;
+  const inner = `${tfHeading(`${actionLabel}: ${versionName} → ${environmentName}`)}
+${tfActorLine('Released by', releasedByName)}
+${tfDetailTable([
+  { label: 'Project', value: projectName },
+  { label: 'Version', value: versionName },
+  { label: 'Environment', value: environmentName },
+  { label: 'Released at', value: releasedAt },
+  { label: 'Issues in release', value: String(issueCount) },
+])}
+${tfCta(versionsUrl, 'View release notes')}`;
+  return tfEmailWrap(inner, 'indigo');
+}
+
+export function renderWatchFieldEmail(params: WatchFieldEmailParams): string {
+  const { issueKey, issueTitle, projectName, changes, actorName, issueUrl, summary } = params;
+  const changeRows =
+    changes.length > 0
+      ? changes.slice(0, 8).map((c) => ({
+          label: c.field,
+          value: `${formatChangeValue(c.from)} → ${formatChangeValue(c.to)}`,
+        }))
+      : summary
+        ? [{ label: 'Update', value: summary }]
+        : [{ label: 'Update', value: 'Issue fields were updated' }];
+  const inner = `${tfHeading('Watched issue updated')}
+${tfActorLine('Updated by', actorName)}
+${tfDetailTable(issueDetailRows({ issueKey, title: issueTitle, projectName }))}
+${tfDetailTable(changeRows)}
+${tfCta(issueUrl, 'Open issue')}`;
+  return tfEmailWrap(inner, 'indigo');
 }
 
 export function renderTicketClosedEmail(

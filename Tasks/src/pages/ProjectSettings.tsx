@@ -79,6 +79,7 @@ import {
   type ProjectIssueType,
   type ProjectPriority,
   type ProjectCustomField,
+  type FieldScheme,
   type ProjectEnvironment,
   type ProjectReleaseRule,
   type ProjectMember,
@@ -86,7 +87,9 @@ import {
   type ProjectDesignation,
   type CustomFieldType,
   type Milestone,
+  type ProjectRule,
 } from '../lib/api';
+import { sortEnvironmentsAsc, sortEnvironmentsDesc } from '../lib/environmentHierarchy';
 import { EditIcon, TrashIcon } from '../components/icons/NavigationIcons';
 import { userHasPermission } from '../utils/permissions';
 import { PROJECT_PERMISSIONS } from '@shared/constants/permissions';
@@ -99,6 +102,7 @@ type TabId =
   | 'customFields'
   | 'environments'
   | 'releaseRules'
+  | 'automation'
   | 'milestones'
   | 'members'
   | 'designations';
@@ -239,6 +243,7 @@ const CUSTOM_FIELD_TYPES: { value: CustomFieldType; label: string }[] = [
   { value: 'select', label: 'Select (single)' },
   { value: 'multiselect', label: 'Multi-select' },
   { value: 'user', label: 'User' },
+  { value: 'formula', label: 'Calculated (formula)' },
 ];
 
 const ALL_PROJECT_PERMISSIONS_LIST = [
@@ -254,6 +259,12 @@ const ALL_PROJECT_PERMISSIONS_LIST = [
   { code: PROJECT_PERMISSIONS.ISSUE.ATTACHMENT.CREATE, label: 'Upload Attachments' },
   { code: PROJECT_PERMISSIONS.ISSUE.ATTACHMENT.READ, label: 'View Attachments' },
   { code: PROJECT_PERMISSIONS.ISSUE.ATTACHMENT.DELETE, label: 'Delete Attachments' },
+  { code: PROJECT_PERMISSIONS.ISSUE.ESTIMATE.SUBMIT, label: 'Submit Estimates' },
+  { code: PROJECT_PERMISSIONS.ISSUE.ESTIMATE.APPROVE, label: 'Approve Estimates' },
+  { code: PROJECT_PERMISSIONS.ISSUE.ESTIMATE.VIEW, label: 'View Estimates' },
+  { code: PROJECT_PERMISSIONS.ISSUE.RULE.MANAGE, label: 'Manage Automation Rules' },
+  { code: PROJECT_PERMISSIONS.WORK_LOG.WORK_LOG.CREATE, label: 'Log Work' },
+  { code: PROJECT_PERMISSIONS.WORK_LOG.WORK_LOG.READ, label: 'View Work Logs' },
   { code: PROJECT_PERMISSIONS.BOARD.BOARD.READ, label: 'View Boards' },
   { code: PROJECT_PERMISSIONS.BOARD.BOARD.UPDATE, label: 'Update Boards' },
   { code: PROJECT_PERMISSIONS.SPRINT.SPRINT.CREATE, label: 'Create Sprints' },
@@ -278,6 +289,7 @@ const TABS: { id: TabId; label: string; description: string }[] = [
   { id: 'customFields', label: 'Custom fields', description: 'Extra columns on issues' },
   { id: 'environments', label: 'Environments', description: 'QA, Staging, Production' },
   { id: 'releaseRules', label: 'Release rules', description: 'Env → issue status for releases' },
+  { id: 'automation', label: 'Automation', description: 'Estimate approval & project rules' },
   { id: 'milestones', label: 'Milestones', description: 'Project milestones for roadmap' },
   { id: 'members', label: 'Members', description: 'Invite and manage people' },
   { id: 'designations', label: 'Designations', description: 'Project-specific roles' },
@@ -521,17 +533,19 @@ export default function ProjectSettings() {
 
   const [statuses, setStatuses] = useState<ProjectStatus[]>([]);
   const [statusEdit, setStatusEdit] = useState<ProjectStatus | null>(null);
-  const [statusForm, setStatusForm] = useState({ name: '', icon: '', color: '', isClosed: false });
+  const [statusForm, setStatusForm] = useState({ name: '', icon: '', color: '', fontColor: '', isClosed: false, userInLane: '' });
 
   const [issueTypes, setIssueTypes] = useState<ProjectIssueType[]>([]);
   const [issueTypeEdit, setIssueTypeEdit] = useState<ProjectIssueType | null>(null);
-  const [issueTypeForm, setIssueTypeForm] = useState({ name: '', icon: '', color: '' });
+  const [issueTypeForm, setIssueTypeForm] = useState({ name: '', icon: '', color: '', fontColor: '' });
 
   const [priorities, setPriorities] = useState<ProjectPriority[]>([]);
   const [priorityEdit, setPriorityEdit] = useState<ProjectPriority | null>(null);
-  const [priorityForm, setPriorityForm] = useState({ name: '', icon: '', color: '' });
+  const [priorityForm, setPriorityForm] = useState({ name: '', icon: '', color: '', fontColor: '' });
 
   const [customFields, setCustomFields] = useState<ProjectCustomField[]>([]);
+  const [fieldSchemes, setFieldSchemes] = useState<FieldScheme[]>([]);
+  const [schemeIssueTypeId, setSchemeIssueTypeId] = useState('');
   const [customFieldEdit, setCustomFieldEdit] = useState<ProjectCustomField | null>(null);
   const [customFieldForm, setCustomFieldForm] = useState({
     key: '',
@@ -539,10 +553,15 @@ export default function ProjectSettings() {
     fieldType: 'text' as CustomFieldType,
     required: false,
     options: '',
+    formula: '',
   });
 
   const [environments, setEnvironments] = useState<ProjectEnvironment[]>([]);
   const [releaseRules, setReleaseRules] = useState<ProjectReleaseRule[]>([]);
+  const [estimateApprovalEnabled, setEstimateApprovalEnabled] = useState(false);
+  const [rulesEnforcementMode, setRulesEnforcementMode] = useState<'log' | 'enforce'>('enforce');
+  const [projectRules, setProjectRules] = useState<ProjectRule[]>([]);
+  const [automationSaving, setAutomationSaving] = useState(false);
   const [milestones, setMilestones] = useState<Milestone[]>([]);
   const [environmentEdit, setEnvironmentEdit] = useState<ProjectEnvironment | null>(null);
   const [environmentForm, setEnvironmentForm] = useState({ name: '' });
@@ -621,8 +640,14 @@ export default function ProjectSettings() {
         setIssueTypes(p.issueTypes ?? []);
         setPriorities(p.priorities ?? []);
         setCustomFields(p.customFields ?? []);
+        setFieldSchemes(p.fieldSchemes ?? []);
+        const types = p.issueTypes ?? [];
+        setSchemeIssueTypeId((prev) => prev || types[0]?.id || '');
         setEnvironments(p.environments ?? []);
         setReleaseRules(p.releaseRules ?? []);
+        setEstimateApprovalEnabled(p.estimateApprovalEnabled ?? false);
+        setRulesEnforcementMode(p.rulesEnforcementMode ?? 'enforce');
+        setProjectRules(p.projectRules ?? []);
       } else setProject(null);
     });
   }, [token, projectId]);
@@ -722,7 +747,7 @@ export default function ProjectSettings() {
       setProject(res.data);
       setStatuses(res.data.statuses ?? []);
       setStatusEdit(null);
-      setStatusForm({ name: '', icon: '', color: '', isClosed: false });
+      setStatusForm({ name: '', icon: '', color: '', fontColor: '', isClosed: false, userInLane: '' });
       showSaved();
     } else setError((res as { message?: string }).message ?? 'Save failed');
   }
@@ -737,7 +762,7 @@ export default function ProjectSettings() {
       setProject(res.data);
       setIssueTypes(res.data.issueTypes ?? []);
       setIssueTypeEdit(null);
-      setIssueTypeForm({ name: '', icon: '', color: '' });
+      setIssueTypeForm({ name: '', icon: '', color: '', fontColor: '' });
       showSaved();
     } else setError((res as { message?: string }).message ?? 'Save failed');
   }
@@ -746,13 +771,14 @@ export default function ProjectSettings() {
     if (!token || !projectId) return;
     setSaving(true);
     setError('');
-    const res = await projectsApi.update(projectId, { customFields }, token);
+    const res = await projectsApi.update(projectId, { customFields, fieldSchemes }, token);
     setSaving(false);
     if (res.success && res.data) {
       setProject(res.data);
       setCustomFields(res.data.customFields ?? []);
+      setFieldSchemes(res.data.fieldSchemes ?? []);
       setCustomFieldEdit(null);
-      setCustomFieldForm({ key: '', label: '', fieldType: 'text', required: false, options: '' });
+      setCustomFieldForm({ key: '', label: '', fieldType: 'text', required: false, options: '', formula: '' });
       showSaved();
     } else setError((res as { message?: string }).message ?? 'Save failed');
   }
@@ -760,16 +786,33 @@ export default function ProjectSettings() {
   function addStatus() {
     const name = statusForm.name.trim();
     if (!name) return;
-    setStatuses((prev) => [...prev, { id: generateId(), name, order: prev.length, isClosed: statusForm.isClosed, icon: statusForm.icon || undefined, color: statusForm.color || undefined }]);
-    setStatusForm({ name: '', icon: '', color: '', isClosed: false });
+    setStatuses((prev) => [...prev, {
+      id: generateId(),
+      name,
+      order: prev.length,
+      isClosed: statusForm.isClosed,
+      icon: statusForm.icon || undefined,
+      color: statusForm.color || undefined,
+      fontColor: statusForm.fontColor || undefined,
+      userInLane: statusForm.userInLane.trim() || undefined,
+    }]);
+    setStatusForm({ name: '', icon: '', color: '', fontColor: '', isClosed: false, userInLane: '' });
   }
   function updateStatusItem() {
     if (!statusEdit) return;
     const name = statusForm.name.trim();
     if (!name) return;
-    setStatuses((prev) => prev.map((s) => (s.id === statusEdit.id ? { ...s, name, isClosed: statusForm.isClosed, icon: statusForm.icon || undefined, color: statusForm.color || undefined } : s)));
+    setStatuses((prev) => prev.map((s) => (s.id === statusEdit.id ? {
+      ...s,
+      name,
+      isClosed: statusForm.isClosed,
+      icon: statusForm.icon || undefined,
+      color: statusForm.color || undefined,
+      fontColor: statusForm.fontColor || undefined,
+      userInLane: statusForm.userInLane.trim() || undefined,
+    } : s)));
     setStatusEdit(null);
-    setStatusForm({ name: '', icon: '', color: '', isClosed: false });
+    setStatusForm({ name: '', icon: '', color: '', fontColor: '', isClosed: false, userInLane: '' });
   }
   function removeStatus(id: string) {
     setStatuses((prev) => prev.filter((s) => s.id !== id).map((s, i) => ({ ...s, order: i })));
@@ -787,16 +830,29 @@ export default function ProjectSettings() {
   function addIssueType() {
     const name = issueTypeForm.name.trim();
     if (!name) return;
-    setIssueTypes((prev) => [...prev, { id: generateId(), name, order: prev.length, icon: issueTypeForm.icon || undefined, color: issueTypeForm.color || undefined }]);
-    setIssueTypeForm({ name: '', icon: '', color: '' });
+    setIssueTypes((prev) => [...prev, {
+      id: generateId(),
+      name,
+      order: prev.length,
+      icon: issueTypeForm.icon || undefined,
+      color: issueTypeForm.color || undefined,
+      fontColor: issueTypeForm.fontColor || undefined,
+    }]);
+    setIssueTypeForm({ name: '', icon: '', color: '', fontColor: '' });
   }
   function updateIssueTypeItem() {
     if (!issueTypeEdit) return;
     const name = issueTypeForm.name.trim();
     if (!name) return;
-    setIssueTypes((prev) => prev.map((t) => (t.id === issueTypeEdit.id ? { ...t, name, icon: issueTypeForm.icon || undefined, color: issueTypeForm.color || undefined } : t)));
+    setIssueTypes((prev) => prev.map((t) => (t.id === issueTypeEdit.id ? {
+      ...t,
+      name,
+      icon: issueTypeForm.icon || undefined,
+      color: issueTypeForm.color || undefined,
+      fontColor: issueTypeForm.fontColor || undefined,
+    } : t)));
     setIssueTypeEdit(null);
-    setIssueTypeForm({ name: '', icon: '', color: '' });
+    setIssueTypeForm({ name: '', icon: '', color: '', fontColor: '' });
   }
   function removeIssueType(id: string) {
     setIssueTypes((prev) => prev.filter((t) => t.id !== id).map((t, i) => ({ ...t, order: i })));
@@ -814,16 +870,29 @@ export default function ProjectSettings() {
   function addPriority() {
     const name = priorityForm.name.trim();
     if (!name) return;
-    setPriorities((prev) => [...prev, { id: generateId(), name, order: prev.length, icon: priorityForm.icon || undefined, color: priorityForm.color || undefined }]);
-    setPriorityForm({ name: '', icon: '', color: '' });
+    setPriorities((prev) => [...prev, {
+      id: generateId(),
+      name,
+      order: prev.length,
+      icon: priorityForm.icon || undefined,
+      color: priorityForm.color || undefined,
+      fontColor: priorityForm.fontColor || undefined,
+    }]);
+    setPriorityForm({ name: '', icon: '', color: '', fontColor: '' });
   }
   function updatePriorityItem() {
     if (!priorityEdit) return;
     const name = priorityForm.name.trim();
     if (!name) return;
-    setPriorities((prev) => prev.map((p) => (p.id === priorityEdit.id ? { ...p, name, icon: priorityForm.icon || undefined, color: priorityForm.color || undefined } : p)));
+    setPriorities((prev) => prev.map((p) => (p.id === priorityEdit.id ? {
+      ...p,
+      name,
+      icon: priorityForm.icon || undefined,
+      color: priorityForm.color || undefined,
+      fontColor: priorityForm.fontColor || undefined,
+    } : p)));
     setPriorityEdit(null);
-    setPriorityForm({ name: '', icon: '', color: '' });
+    setPriorityForm({ name: '', icon: '', color: '', fontColor: '' });
   }
   function removePriority(id: string) {
     setPriorities((prev) => prev.filter((p) => p.id !== id).map((p, i) => ({ ...p, order: i })));
@@ -847,7 +916,7 @@ export default function ProjectSettings() {
       setProject(res.data);
       setPriorities(res.data.priorities ?? []);
       setPriorityEdit(null);
-      setPriorityForm({ name: '', icon: '', color: '' });
+      setPriorityForm({ name: '', icon: '', color: '', fontColor: '' });
       showSaved();
     } else setError((res as { message?: string }).message ?? 'Save failed');
   }
@@ -866,11 +935,22 @@ export default function ProjectSettings() {
       return;
     }
     setError('');
+    const formula =
+      customFieldForm.fieldType === 'formula' ? customFieldForm.formula.trim() || undefined : undefined;
     setCustomFields((prev) => [
       ...prev,
-      { id: generateId(), key, label, fieldType: customFieldForm.fieldType, required: customFieldForm.required, options, order: prev.length },
+      {
+        id: generateId(),
+        key,
+        label,
+        fieldType: customFieldForm.fieldType,
+        required: customFieldForm.fieldType === 'formula' ? false : customFieldForm.required,
+        options,
+        formula,
+        order: prev.length,
+      },
     ]);
-    setCustomFieldForm({ key: '', label: '', fieldType: 'text', required: false, options: '' });
+    setCustomFieldForm({ key: '', label: '', fieldType: 'text', required: false, options: '', formula: '' });
   }
   function updateCustomFieldItem() {
     if (!customFieldEdit) return;
@@ -881,17 +961,58 @@ export default function ProjectSettings() {
       customFieldForm.fieldType === 'select' || customFieldForm.fieldType === 'multiselect'
         ? customFieldForm.options.split(/[\n,]/).map((s) => s.trim()).filter(Boolean)
         : undefined;
+    const formula =
+      customFieldForm.fieldType === 'formula' ? customFieldForm.formula.trim() || undefined : undefined;
     setCustomFields((prev) =>
       prev.map((f) =>
-        f.id === customFieldEdit.id ? { ...f, key, label, fieldType: customFieldForm.fieldType, required: customFieldForm.required, options } : f
+        f.id === customFieldEdit.id
+          ? {
+              ...f,
+              key,
+              label,
+              fieldType: customFieldForm.fieldType,
+              required: customFieldForm.fieldType === 'formula' ? false : customFieldForm.required,
+              options,
+              formula,
+            }
+          : f
       )
     );
     setCustomFieldEdit(null);
-    setCustomFieldForm({ key: '', label: '', fieldType: 'text', required: false, options: '' });
+    setCustomFieldForm({ key: '', label: '', fieldType: 'text', required: false, options: '', formula: '' });
     setError('');
   }
   function removeCustomField(id: string) {
     setCustomFields((prev) => prev.filter((f) => f.id !== id).map((f, i) => ({ ...f, order: i })));
+  }
+
+  function getSchemeRule(issueTypeId: string, fieldKey: string): { visible: boolean; required?: boolean } {
+    const scheme = fieldSchemes.find((s) => s.issueTypeId === issueTypeId);
+    const rule = scheme?.rules.find((r) => r.fieldKey === fieldKey);
+    if (rule) return rule;
+    return { visible: true, required: undefined };
+  }
+
+  function setSchemeRule(
+    issueTypeId: string,
+    fieldKey: string,
+    patch: Partial<{ visible: boolean; required?: boolean }>
+  ) {
+    setFieldSchemes((prev) => {
+      const idx = prev.findIndex((s) => s.issueTypeId === issueTypeId);
+      const base = idx >= 0 ? { ...prev[idx], rules: [...prev[idx].rules] } : { issueTypeId, rules: [] as FieldScheme['rules'] };
+      const rIdx = base.rules.findIndex((r) => r.fieldKey === fieldKey);
+      const current = rIdx >= 0 ? base.rules[rIdx] : { fieldKey, visible: true };
+      const next = { ...current, ...patch };
+      if (rIdx >= 0) base.rules[rIdx] = next;
+      else base.rules.push(next);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = base;
+        return copy;
+      }
+      return [...prev, base];
+    });
   }
 
   function addEnvironment() {
@@ -1017,6 +1138,21 @@ export default function ProjectSettings() {
     }));
   }
 
+  function moveEnvironmentTier(envId: string, direction: 'up' | 'down') {
+    const sorted = sortEnvironmentsAsc(environments);
+    const idx = sorted.findIndex((e) => e.id === envId);
+    if (idx < 0) return;
+    const swapIdx = direction === 'up' ? idx + 1 : idx - 1;
+    if (swapIdx < 0 || swapIdx >= sorted.length) return;
+    const swapped = sorted.map((e) => ({ ...e }));
+    const aOrder = swapped[idx].order;
+    swapped[idx] = { ...swapped[idx], order: swapped[swapIdx].order };
+    swapped[swapIdx] = { ...swapped[swapIdx], order: aOrder };
+    const normalized = sortEnvironmentsAsc(swapped).map((e, i) => ({ ...e, order: i }));
+    setEnvironments(normalized);
+    saveEnvironments(normalized);
+  }
+
   async function saveEnvironments(next?: ProjectEnvironment[]) {
     const toSave = next ?? environments;
     if (!token || !projectId) return;
@@ -1032,6 +1168,46 @@ export default function ProjectSettings() {
       showSaved();
     } else setError((res as { message?: string }).message ?? 'Save failed');
   }
+
+  async function saveAutomation() {
+    if (!token || !projectId) return;
+    setAutomationSaving(true);
+    setError('');
+    const res = await projectsApi.update(
+      projectId,
+      { estimateApprovalEnabled, rulesEnforcementMode, projectRules },
+      token
+    );
+    setAutomationSaving(false);
+    if (res.success && res.data) {
+      setProject(res.data);
+      setEstimateApprovalEnabled(res.data.estimateApprovalEnabled ?? false);
+      setRulesEnforcementMode(res.data.rulesEnforcementMode ?? 'enforce');
+      setProjectRules(res.data.projectRules ?? []);
+      showSaved();
+    } else setError((res as { message?: string }).message ?? 'Save failed');
+  }
+
+  async function enableEstimateApprovalPack() {
+    if (!token || !projectId) return;
+    setAutomationSaving(true);
+    setError('');
+    const res = await projectsApi.enableEstimateApproval(projectId, token);
+    setAutomationSaving(false);
+    if (res.success && res.data) {
+      setProject(res.data);
+      setEstimateApprovalEnabled(res.data.estimateApprovalEnabled ?? true);
+      setProjectRules(res.data.projectRules ?? []);
+      showSaved();
+    } else setError((res as { message?: string }).message ?? 'Enable failed');
+  }
+
+  function toggleRuleEnabled(ruleId: string) {
+    setProjectRules((prev) =>
+      prev.map((r) => (r.id === ruleId ? { ...r, enabled: !r.enabled } : r))
+    );
+  }
+
   async function saveReleaseRules(next?: ProjectReleaseRule[]) {
     const toSave = next ?? releaseRules;
     if (!token || !projectId) return;
@@ -1150,7 +1326,7 @@ export default function ProjectSettings() {
   if (loading) {
     return (
       <div className="min-h-screen bg-[color:var(--bg-page)]">
-        <div className="p-6 lg:p-10 max-w-6xl mx-auto">
+        <div className="w-full max-w-[1440px] p-6 lg:p-10 mx-auto">
           <div className="h-6 w-40 bg-[color:var(--bg-surface)] rounded-lg animate-pulse mb-6" />
           <div className="flex gap-8">
             <div className="w-56 h-64 bg-[color:var(--bg-surface)] rounded-2xl animate-pulse" />
@@ -1180,7 +1356,7 @@ export default function ProjectSettings() {
 
   return (
     <div className="min-h-screen bg-[color:var(--bg-page)]">
-      <div className="p-6 lg:p-10 max-w-6xl mx-auto">
+      <div className="w-full max-w-[1440px] p-6 lg:p-10 mx-auto">
         {/* Header */}
         <div className="mb-8">
           <Link
@@ -1213,6 +1389,12 @@ export default function ProjectSettings() {
                   >
                     View all templates
                   </Link>
+                  <Link
+                    to={`/projects/${projectId}/import`}
+                    className="text-xs text-[color:var(--accent)] hover:underline font-medium"
+                  >
+                    Import issues (ADO / CSV / Jira)
+                  </Link>
                 </div>
               )}
             </div>
@@ -1224,9 +1406,9 @@ export default function ProjectSettings() {
           </div>
         </div>
 
-        <div className="flex flex-col lg:flex-row gap-8">
+        <div className="flex flex-col lg:flex-row gap-6 xl:gap-8">
           {/* Sidebar nav */}
-          <nav className="lg:w-56 shrink-0">
+          <nav className="lg:w-64 xl:w-72 shrink-0">
             <div className="flex lg:flex-col gap-1 p-1 rounded-2xl bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] overflow-x-auto lg:overflow-visible">
               {TABS.filter(
                 (t) =>
@@ -1253,7 +1435,7 @@ export default function ProjectSettings() {
           </nav>
 
           {/* Content */}
-          <main className="flex-1 min-w-0">
+          <main className="flex-1 min-w-0 xl:flex-[1_1_auto]">
             {error && (
               <div className="mb-6 p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
                 {error}
@@ -1357,7 +1539,7 @@ export default function ProjectSettings() {
                       <IconSelect
                         value={statusForm.icon as MetaIconKey | ''}
                         onChange={(val) => setStatusForm((f) => ({ ...f, icon: val }))}
-                        color={statusForm.color || undefined}
+                        color={statusForm.fontColor || statusForm.color || undefined}
                       />
                     </div>
                     <div className="w-36">
@@ -1378,6 +1560,24 @@ export default function ProjectSettings() {
                         />
                       </div>
                     </div>
+                    <div className="w-40">
+                      <label className={labelClass}>Font color</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={statusForm.fontColor || '#111827'}
+                          onChange={(e) => setStatusForm((f) => ({ ...f, fontColor: e.target.value }))}
+                          className="h-8 w-8 rounded-md border border-[color:var(--border-subtle)] bg-transparent cursor-pointer"
+                        />
+                        <input
+                          type="text"
+                          value={statusForm.fontColor}
+                          onChange={(e) => setStatusForm((f) => ({ ...f, fontColor: e.target.value }))}
+                          placeholder="#111827"
+                          className={`${inputClass} w-28`}
+                        />
+                      </div>
+                    </div>
                     <div className="w-44">
                       <label className={labelClass}>Issue state</label>
                       <select
@@ -1389,12 +1589,23 @@ export default function ProjectSettings() {
                         <option value="closed">Closed</option>
                       </select>
                     </div>
+                    <div className="w-36">
+                      <label className={labelClass}>Work lane</label>
+                      <input
+                        type="text"
+                        value={statusForm.userInLane}
+                        onChange={(e) => setStatusForm((f) => ({ ...f, userInLane: e.target.value }))}
+                        placeholder="e.g. dev"
+                        className={inputClass}
+                        title="Lane id for estimate approval (statuses sharing a lane gate together)"
+                      />
+                    </div>
                     {statusEdit ? (
                       <>
                         <button type="button" onClick={updateStatusItem} className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-page)] text-xs text-[color:var(--text-primary)] font-medium hover:bg-[color:var(--bg-surface)]">
                           Update
                         </button>
-                        <button type="button" onClick={() => { setStatusEdit(null); setStatusForm({ name: '', icon: '', color: '', isClosed: false }); }} className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] text-xs text-[color:var(--text-muted)]">
+                        <button type="button" onClick={() => { setStatusEdit(null); setStatusForm({ name: '', icon: '', color: '', fontColor: '', isClosed: false, userInLane: '' }); }} className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] text-xs text-[color:var(--text-muted)]">
                           Cancel
                         </button>
                       </>
@@ -1421,12 +1632,18 @@ export default function ProjectSettings() {
                           <li key={s.id} className="flex items-center justify-between gap-2 px-4 py-3 bg-[color:var(--bg-surface)] hover:bg-[color:var(--bg-elevated)] transition group">
                             <span className="flex items-center gap-2">
                               {s.icon && (
-                                <span style={s.color ? { color: s.color } : undefined}>
+                                <span style={s.fontColor || s.color ? { color: s.fontColor || s.color } : undefined}>
                                   <MetaIconGlyph icon={s.icon} className="w-3.5 h-3.5" />
                                 </span>
                               )}
                               {s.color && <span className="w-4 h-4 rounded border border-[color:var(--border-subtle)] shrink-0" style={{ backgroundColor: s.color }} />}
-                              <span className="font-medium text-[color:var(--text-primary)] text-sm">{s.name}</span>
+                              {s.fontColor && <span className="w-4 h-4 rounded border border-[color:var(--border-subtle)] shrink-0" style={{ backgroundColor: s.fontColor }} title="Font color" />}
+                              <span className="font-medium text-sm" style={s.fontColor ? { color: s.fontColor } : undefined}>{s.name}</span>
+                              {s.userInLane && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] border text-[color:var(--text-muted)] border-[color:var(--border-subtle)] bg-[color:var(--bg-page)]">
+                                  lane: {s.userInLane}
+                                </span>
+                              )}
                               <span className={`px-1.5 py-0.5 rounded text-[10px] border ${s.isClosed ? 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10' : 'text-sky-300 border-sky-500/40 bg-sky-500/10'}`}>
                                 {s.isClosed ? 'Closed' : 'Open'}
                               </span>
@@ -1446,7 +1663,7 @@ export default function ProjectSettings() {
                                 title="Edit"
                                 onClick={() => {
                                   setStatusEdit(s);
-                                  setStatusForm({ name: s.name, icon: s.icon ?? '', color: s.color ?? '', isClosed: Boolean(s.isClosed) });
+                                  setStatusForm({ name: s.name, icon: s.icon ?? '', color: s.color ?? '', fontColor: s.fontColor ?? '', isClosed: Boolean(s.isClosed), userInLane: s.userInLane ?? '' });
                                 }}
                               >
                                 <EditIcon className="w-3.5 h-3.5" />
@@ -1479,8 +1696,8 @@ export default function ProjectSettings() {
                   <p className="text-[color:var(--text-muted)] text-xs mt-0.5">Types of work (Task, Bug, Story, Epic). Customize to match your team.</p>
                 </div>
                 <div className="p-6 space-y-6">
-                  <div className="flex flex-wrap gap-3 items-end">
-                    <div className="flex-1 min-w-[200px]">
+                  <div className="flex flex-wrap gap-4 items-end">
+                    <div className="flex-[2_1_220px] min-w-[200px]">
                       <label className={labelClass}>Add or edit issue type</label>
                       <input
                         type="text"
@@ -1491,15 +1708,15 @@ export default function ProjectSettings() {
                         onKeyDown={(e) => e.key === 'Enter' && (issueTypeEdit ? updateIssueTypeItem() : addIssueType())}
                       />
                     </div>
-                    <div className="w-32">
+                    <div className="flex-[1_1_140px] min-w-[140px]">
                       <label className={labelClass}>Icon</label>
                       <IconSelect
                         value={issueTypeForm.icon as MetaIconKey | ''}
                         onChange={(val) => setIssueTypeForm((f) => ({ ...f, icon: val }))}
-                        color={issueTypeForm.color || undefined}
+                        color={issueTypeForm.fontColor || issueTypeForm.color || undefined}
                       />
                     </div>
-                    <div className="w-36">
+                    <div className="flex-[1_1_160px] min-w-[150px]">
                       <label className={labelClass}>Color</label>
                       <div className="flex items-center gap-2">
                         <input
@@ -1517,35 +1734,55 @@ export default function ProjectSettings() {
                         />
                       </div>
                     </div>
-                    {issueTypeEdit ? (
-                      <>
+                    <div className="flex-[1_1_170px] min-w-[160px]">
+                      <label className={labelClass}>Font color</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={issueTypeForm.fontColor || '#111827'}
+                          onChange={(e) => setIssueTypeForm((f) => ({ ...f, fontColor: e.target.value }))}
+                          className="h-8 w-8 rounded-md border border-[color:var(--border-subtle)] bg-transparent cursor-pointer"
+                        />
+                        <input
+                          type="text"
+                          value={issueTypeForm.fontColor}
+                          onChange={(e) => setIssueTypeForm((f) => ({ ...f, fontColor: e.target.value }))}
+                          placeholder="#111827"
+                          className={`${inputClass} w-28`}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex-1 min-w-[140px] flex justify-end gap-2">
+                      {issueTypeEdit ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={updateIssueTypeItem}
+                            className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-page)] text-xs text-[color:var(--text-primary)] font-medium hover:bg-[color:var(--bg-surface)]"
+                          >
+                            Update
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIssueTypeEdit(null);
+                              setIssueTypeForm({ name: '', icon: '', color: '', fontColor: '' });
+                            }}
+                            className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] text-xs text-[color:var(--text-muted)]"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
                         <button
                           type="button"
-                          onClick={updateIssueTypeItem}
+                          onClick={addIssueType}
                           className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-page)] text-xs text-[color:var(--text-primary)] font-medium hover:bg-[color:var(--bg-surface)]"
                         >
-                          Update
+                          Add type
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIssueTypeEdit(null);
-                            setIssueTypeForm({ name: '', icon: '', color: '' });
-                          }}
-                          className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] text-xs text-[color:var(--text-muted)]"
-                        >
-                          Cancel
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={addIssueType}
-                        className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-page)] text-xs text-[color:var(--text-primary)] font-medium hover:bg-[color:var(--bg-surface)]"
-                      >
-                        Add type
-                      </button>
-                    )}
+                      )}
+                    </div>
                   </div>
                   <div>
                     <div className="flex items-center justify-between mb-3">
@@ -1569,7 +1806,7 @@ export default function ProjectSettings() {
                           >
                             <span className="flex items-center gap-2">
                               {t.icon && (
-                                <span style={t.color ? { color: t.color } : undefined}>
+                                <span style={t.fontColor || t.color ? { color: t.fontColor || t.color } : undefined}>
                                   <MetaIconGlyph icon={t.icon} className="w-3.5 h-3.5" />
                                 </span>
                               )}
@@ -1579,7 +1816,14 @@ export default function ProjectSettings() {
                                   style={{ backgroundColor: t.color }}
                                 />
                               )}
-                              <span className="font-medium text-[color:var(--text-primary)] text-sm">{t.name}</span>
+                              {t.fontColor && (
+                                <span
+                                  className="w-4 h-4 rounded border border-[color:var(--border-subtle)] shrink-0"
+                                  style={{ backgroundColor: t.fontColor }}
+                                  title="Font color"
+                                />
+                              )}
+                              <span className="font-medium text-sm" style={t.fontColor ? { color: t.fontColor } : undefined}>{t.name}</span>
                             </span>
                             <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition">
                               <IconButton title="Move up" onClick={() => moveIssueType(t.id, -1)} disabled={idx === 0}>
@@ -1596,7 +1840,7 @@ export default function ProjectSettings() {
                                 title="Edit"
                                 onClick={() => {
                                   setIssueTypeEdit(t);
-                                  setIssueTypeForm({ name: t.name, icon: t.icon ?? '', color: t.color ?? '' });
+                                  setIssueTypeForm({ name: t.name, icon: t.icon ?? '', color: t.color ?? '', fontColor: t.fontColor ?? '' });
                                 }}
                               >
                                 <EditIcon className="w-3.5 h-3.5" />
@@ -1629,8 +1873,8 @@ export default function ProjectSettings() {
                   <p className="text-[color:var(--text-muted)] text-xs mt-0.5">Priority levels for issues (e.g. Low, Medium, High). Choose icon and color for each.</p>
                 </div>
                 <div className="p-6 space-y-6">
-                  <div className="flex flex-wrap gap-3 items-end">
-                    <div className="flex-1 min-w-[200px]">
+                  <div className="flex flex-wrap gap-4 items-end">
+                    <div className="flex-[2_1_220px] min-w-[200px]">
                       <label className={labelClass}>Add or edit priority</label>
                       <input
                         type="text"
@@ -1641,15 +1885,15 @@ export default function ProjectSettings() {
                         onKeyDown={(e) => e.key === 'Enter' && (priorityEdit ? updatePriorityItem() : addPriority())}
                       />
                     </div>
-                    <div className="w-32">
+                    <div className="flex-[1_1_140px] min-w-[140px]">
                       <label className={labelClass}>Icon</label>
                       <IconSelect
                         value={priorityForm.icon as MetaIconKey | ''}
                         onChange={(val) => setPriorityForm((f) => ({ ...f, icon: val }))}
-                        color={priorityForm.color || undefined}
+                        color={priorityForm.fontColor || priorityForm.color || undefined}
                       />
                     </div>
-                    <div className="w-36">
+                    <div className="flex-[1_1_160px] min-w-[150px]">
                       <label className={labelClass}>Color</label>
                       <div className="flex items-center gap-2">
                         <input
@@ -1667,35 +1911,55 @@ export default function ProjectSettings() {
                         />
                       </div>
                     </div>
-                    {priorityEdit ? (
-                      <>
+                    <div className="flex-[1_1_170px] min-w-[160px]">
+                      <label className={labelClass}>Font color</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={priorityForm.fontColor || '#111827'}
+                          onChange={(e) => setPriorityForm((f) => ({ ...f, fontColor: e.target.value }))}
+                          className="h-8 w-8 rounded-md border border-[color:var(--border-subtle)] bg-transparent cursor-pointer"
+                        />
+                        <input
+                          type="text"
+                          value={priorityForm.fontColor}
+                          onChange={(e) => setPriorityForm((f) => ({ ...f, fontColor: e.target.value }))}
+                          placeholder="#111827"
+                          className={`${inputClass} w-28`}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex-1 min-w-[140px] flex justify-end gap-2">
+                      {priorityEdit ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={updatePriorityItem}
+                            className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-page)] text-xs text-[color:var(--text-primary)] font-medium hover:bg-[color:var(--bg-surface)]"
+                          >
+                            Update
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPriorityEdit(null);
+                              setPriorityForm({ name: '', icon: '', color: '', fontColor: '' });
+                            }}
+                            className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] text-xs text-[color:var(--text-muted)]"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
                         <button
                           type="button"
-                          onClick={updatePriorityItem}
-                          className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-page)] text-xs text-[color:var(--text-primary)] font-medium hover:bg-[color:var(--bg-surface)]"
+                          onClick={addPriority}
+                          className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-page)] text-xs text-[color:var(--text-primary)] font_medium hover:bg-[color:var(--bg-surface)]"
                         >
-                          Update
+                          Add priority
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setPriorityEdit(null);
-                            setPriorityForm({ name: '', icon: '', color: '' });
-                          }}
-                          className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] text-xs text-[color:var(--text-muted)]"
-                        >
-                          Cancel
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={addPriority}
-                        className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-page)] text-xs text-[color:var(--text-primary)] font-medium hover:bg-[color:var(--bg-surface)]"
-                      >
-                        Add priority
-                      </button>
-                    )}
+                      )}
+                    </div>
                   </div>
                   <div>
                     <div className="flex items-center justify-between mb-3">
@@ -1719,7 +1983,7 @@ export default function ProjectSettings() {
                           >
                             <span className="flex items-center gap-2">
                               {p.icon && (
-                                <span style={p.color ? { color: p.color } : undefined}>
+                                <span style={p.fontColor || p.color ? { color: p.fontColor || p.color } : undefined}>
                                   <MetaIconGlyph icon={p.icon} className="w-3.5 h-3.5" />
                                 </span>
                               )}
@@ -1729,7 +1993,14 @@ export default function ProjectSettings() {
                                   style={{ backgroundColor: p.color }}
                                 />
                               )}
-                              <span className="font-medium text-[color:var(--text-primary)] text-sm">{p.name}</span>
+                              {p.fontColor && (
+                                <span
+                                  className="w-4 h-4 rounded border border-[color:var(--border-subtle)] shrink-0"
+                                  style={{ backgroundColor: p.fontColor }}
+                                  title="Font color"
+                                />
+                              )}
+                              <span className="font-medium text-sm" style={p.fontColor ? { color: p.fontColor } : undefined}>{p.name}</span>
                             </span>
                             <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition">
                               <IconButton title="Move up" onClick={() => movePriority(p.id, -1)} disabled={idx === 0}>
@@ -1746,7 +2017,7 @@ export default function ProjectSettings() {
                                 title="Edit"
                                 onClick={() => {
                                   setPriorityEdit(p);
-                                  setPriorityForm({ name: p.name, icon: p.icon ?? '', color: p.color ?? '' });
+                                  setPriorityForm({ name: p.name, icon: p.icon ?? '', color: p.color ?? '', fontColor: p.fontColor ?? '' });
                                 }}
                               >
                                 <EditIcon className="w-3.5 h-3.5" />
@@ -1820,16 +2091,33 @@ export default function ProjectSettings() {
                           ))}
                         </select>
                       </div>
-                      <label className="flex items-center gap-2 cursor-pointer mt-6">
-                        <input
-                          type="checkbox"
-                          checked={customFieldForm.required}
-                          onChange={(e) => setCustomFieldForm((f) => ({ ...f, required: e.target.checked }))}
-                          className="rounded border-[color:var(--border-subtle)] bg-[color:var(--bg-page)] text-[color:var(--accent)] focus:ring-[color:var(--accent)]"
-                        />
-                        <span className="text-[color:var(--text-primary)] text-xs">Required</span>
-                      </label>
+                      {customFieldForm.fieldType !== 'formula' && (
+                        <label className="flex items-center gap-2 cursor-pointer mt-6">
+                          <input
+                            type="checkbox"
+                            checked={customFieldForm.required}
+                            onChange={(e) => setCustomFieldForm((f) => ({ ...f, required: e.target.checked }))}
+                            className="rounded border-[color:var(--border-subtle)] bg-[color:var(--bg-page)] text-[color:var(--accent)] focus:ring-[color:var(--accent)]"
+                          />
+                          <span className="text-[color:var(--text-primary)] text-xs">Required</span>
+                        </label>
+                      )}
                     </div>
+                    {customFieldForm.fieldType === 'formula' && (
+                      <div>
+                        <label className={labelClass}>Formula</label>
+                        <input
+                          type="text"
+                          value={customFieldForm.formula}
+                          onChange={(e) => setCustomFieldForm((f) => ({ ...f, formula: e.target.value }))}
+                          placeholder="e.g. {storyPoints} * 8 or daysBetween({startDate},{dueDate})"
+                          className={`${inputClass} font-mono text-sm`}
+                        />
+                        <p className="text-[11px] text-[color:var(--text-muted)] mt-1">
+                          Use {'{fieldKey}'} for custom fields, {'{storyPoints}'}, {'{startDate}'}, {'{dueDate}'}. Functions: daysBetween, coalesce, round.
+                        </p>
+                      </div>
+                    )}
                     {(customFieldForm.fieldType === 'select' || customFieldForm.fieldType === 'multiselect') && (
                       <div>
                         <label className={labelClass}>Options (one per line or comma-separated)</label>
@@ -1862,6 +2150,7 @@ export default function ProjectSettings() {
                                 fieldType: 'text',
                                 required: false,
                                 options: '',
+                                formula: '',
                               });
                               setError('');
                             }}
@@ -1920,6 +2209,7 @@ export default function ProjectSettings() {
                                     fieldType: f.fieldType,
                                     required: f.required,
                                     options: f.options?.join('\n') ?? '',
+                                    formula: f.formula ?? '',
                                   });
                                 }}
                               >
@@ -1934,13 +2224,102 @@ export default function ProjectSettings() {
                       </ul>
                     )}
                   </div>
+                  {customFields.length > 0 && issueTypes.length > 0 && (
+                    <div className="rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] p-5 space-y-4">
+                      <div>
+                        <h3 className="text-sm font-medium text-[color:var(--text-primary)]">Field schemes by issue type</h3>
+                        <p className="text-[11px] text-[color:var(--text-muted)] mt-0.5">
+                          Control visibility and required overrides per issue type. Calculated fields are always shown.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {issueTypes.map((t) => (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={() => setSchemeIssueTypeId(t.id)}
+                            className={`px-3 py-1 rounded-md text-xs border transition ${
+                              schemeIssueTypeId === t.id
+                                ? 'border-[color:var(--accent)] text-[color:var(--accent)] bg-[color:var(--accent)]/10'
+                                : 'border-[color:var(--border-subtle)] text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]'
+                            }`}
+                          >
+                            {t.name}
+                          </button>
+                        ))}
+                      </div>
+                      {schemeIssueTypeId && (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="text-left text-[color:var(--text-muted)] border-b border-[color:var(--border-subtle)]">
+                                <th className="py-2 pr-4">Field</th>
+                                <th className="py-2 pr-4">Visible</th>
+                                <th className="py-2">Required override</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {customFields.map((f) => {
+                                const rule = getSchemeRule(schemeIssueTypeId, f.key);
+                                const isFormula = f.fieldType === 'formula';
+                                return (
+                                  <tr key={f.id} className="border-b border-[color:var(--border-subtle)]/50">
+                                    <td className="py-2 pr-4 text-[color:var(--text-primary)]">
+                                      {f.label}
+                                      <span className="text-[color:var(--text-muted)] font-mono ml-1">{f.key}</span>
+                                    </td>
+                                    <td className="py-2 pr-4">
+                                      <input
+                                        type="checkbox"
+                                        checked={isFormula ? true : rule.visible}
+                                        disabled={isFormula}
+                                        onChange={(e) =>
+                                          setSchemeRule(schemeIssueTypeId, f.key, { visible: e.target.checked })
+                                        }
+                                      />
+                                    </td>
+                                    <td className="py-2">
+                                      {isFormula ? (
+                                        <span className="text-[color:var(--text-muted)]">—</span>
+                                      ) : (
+                                        <select
+                                          value={
+                                            rule.required === undefined
+                                              ? 'default'
+                                              : rule.required
+                                                ? 'yes'
+                                                : 'no'
+                                          }
+                                          onChange={(e) => {
+                                            const v = e.target.value;
+                                            setSchemeRule(schemeIssueTypeId, f.key, {
+                                              required: v === 'default' ? undefined : v === 'yes',
+                                            });
+                                          }}
+                                          className={inputClass}
+                                        >
+                                          <option value="default">Project default{f.required ? ' (required)' : ''}</option>
+                                          <option value="yes">Required</option>
+                                          <option value="no">Optional</option>
+                                        </select>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <button
                     type="button"
                     onClick={saveCustomFields}
                     disabled={saving}
                     className="px-4 py-1.5 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-page)] text-xs text-[color:var(--text-primary)] font-medium hover:bg-[color:var(--bg-surface)] disabled:opacity-50 transition"
                   >
-                    {saving ? 'Saving…' : 'Save custom fields'}
+                    {saving ? 'Saving…' : 'Save custom fields & schemes'}
                   </button>
                 </div>
               </div>
@@ -1951,7 +2330,7 @@ export default function ProjectSettings() {
                 <div className="p-6 border-b border-[color:var(--border-subtle)]">
                   <h2 className="text-sm font-semibold text-[color:var(--text-primary)]">Environments</h2>
                   <p className="text-[color:var(--text-muted)] text-xs mt-0.5">
-                    Define deployment environments (e.g. QA, Staging, Production). Use these on the Versions page when releasing.
+                    Order tiers from lower (bottom) to upper (top), e.g. Dev → QA → Production. On the Versions page you can release to any tier in any order—lower environments are not required before upper ones.
                   </p>
                 </div>
                 <div className="p-6 space-y-6">
@@ -2012,13 +2391,37 @@ export default function ProjectSettings() {
                       </div>
                     ) : (
                       <ul className="rounded-xl border border-[color:var(--border-subtle)] overflow-hidden divide-y divide-[color:var(--border-subtle)]/70">
-                        {environments.map((env) => (
+                        {sortEnvironmentsDesc(environments).map((env, tierIdx) => {
+                          const asc = sortEnvironmentsAsc(environments);
+                          const ascIdx = asc.findIndex((e) => e.id === env.id);
+                          const tierLabel =
+                            tierIdx === 0 ? 'Upper' : tierIdx === environments.length - 1 ? 'Lower' : 'Middle';
+                          return (
                           <li
                             key={env.id}
                             className="flex items-center justify-between gap-2 px-4 py-3 bg-[color:var(--bg-surface)] hover:bg-[color:var(--bg-elevated)] transition group"
                           >
-                            <span className="font-medium text-[color:var(--text-primary)] text-sm">{env.name}</span>
-                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition">
+                            <div className="min-w-0 flex items-center gap-2">
+                              <span className="text-[10px] uppercase tracking-wide text-[color:var(--text-muted)] w-12 shrink-0">
+                                {tierLabel}
+                              </span>
+                              <span className="font-medium text-[color:var(--text-primary)] text-sm truncate">{env.name}</span>
+                            </div>
+                            <div className="flex items-center gap-0.5 shrink-0">
+                              <IconButton
+                                title="Move up (higher tier)"
+                                onClick={() => moveEnvironmentTier(env.id, 'up')}
+                                disabled={ascIdx >= asc.length - 1}
+                              >
+                                <FiArrowUp className="w-3.5 h-3.5" />
+                              </IconButton>
+                              <IconButton
+                                title="Move down (lower tier)"
+                                onClick={() => moveEnvironmentTier(env.id, 'down')}
+                                disabled={ascIdx <= 0}
+                              >
+                                <FiArrowDown className="w-3.5 h-3.5" />
+                              </IconButton>
                               <IconButton
                                 title="Edit"
                                 onClick={() => {
@@ -2033,7 +2436,8 @@ export default function ProjectSettings() {
                               </IconButton>
                             </div>
                           </li>
-                        ))}
+                          );
+                        })}
                       </ul>
                     )}
                   </div>
@@ -2075,6 +2479,9 @@ export default function ProjectSettings() {
                         {releaseRules.map((r) => {
                           const env = environments.find((e) => e.id === r.environmentId);
                           const envName = env?.name ?? r.environmentId;
+                          const assigneeName = r.assigneeId
+                            ? users.find((u) => u._id === r.assigneeId)?.name ?? 'Unknown user'
+                            : null;
                           const notifyOn = (r.notifyUserIds?.length ?? 0) > 0 || (r.notifyChannels?.length ?? 0) > 0;
                           const notifyNote = notifyOn
                             ? [
@@ -2094,6 +2501,15 @@ export default function ProjectSettings() {
                                 <span className="font-medium text-[color:var(--text-primary)] text-sm">{envName}</span>
                                 <span className="text-[color:var(--text-muted)] text-xs">→</span>
                                 <span className="text-[color:var(--text-muted)] text-xs">{r.statusName}</span>
+                                {assigneeName && (
+                                  <>
+                                    <span className="text-[color:var(--text-muted)] text-xs">|</span>
+                                    <span className="text-[11px] font-medium uppercase tracking-wide text-[color:var(--text-muted)]">
+                                      Assign
+                                    </span>
+                                    <span className="text-xs text-[color:var(--text-primary)]">{assigneeName}</span>
+                                  </>
+                                )}
                                 <span className="text-[color:var(--text-muted)] text-xs">|</span>
                                 <span className="text-[11px] font-medium uppercase tracking-wide text-[color:var(--text-muted)]">
                                   Notify
@@ -2138,6 +2554,101 @@ export default function ProjectSettings() {
                       </ul>
                     )}
                   </div>
+                </div>
+              </div>
+            )}
+
+            {tab === 'automation' && (
+              <div className="rounded-2xl bg-[color:var(--bg-surface)] border border-[color:var(--border-subtle)] overflow-hidden">
+                <div className="p-6 border-b border-[color:var(--border-subtle)]">
+                  <h2 className="text-sm font-semibold text-[color:var(--text-primary)]">Automation & estimate approval</h2>
+                  <p className="text-[color:var(--text-muted)] text-xs mt-0.5">
+                    Enable per-lane estimate approval and configure project rules. Assign lane ids on the Statuses tab.
+                  </p>
+                </div>
+                <div className="p-6 space-y-6">
+                  <div className="flex flex-wrap items-center gap-4">
+                    <label className="flex items-center gap-2 text-sm text-[color:var(--text-primary)]">
+                      <input
+                        type="checkbox"
+                        checked={estimateApprovalEnabled}
+                        onChange={(e) => setEstimateApprovalEnabled(e.target.checked)}
+                        className="rounded border-[color:var(--border-subtle)]"
+                      />
+                      Enable estimate approval
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-[color:var(--text-muted)]">Enforcement</span>
+                      <select
+                        value={rulesEnforcementMode}
+                        onChange={(e) => setRulesEnforcementMode(e.target.value as 'log' | 'enforce')}
+                        className={`${inputClass} w-auto`}
+                      >
+                        <option value="enforce">Enforce</option>
+                        <option value="log">Log only</option>
+                      </select>
+                    </div>
+                    {projectId && (
+                      <Link
+                        to={`/projects/${projectId}/estimate-approvals`}
+                        className="text-xs text-[color:var(--accent)] hover:underline"
+                      >
+                        Open approval queue →
+                      </Link>
+                    )}
+                  </div>
+                  {!projectRules.length && (
+                    <div className="rounded-xl border border-dashed border-[color:var(--border-subtle)] p-4 flex flex-wrap items-center justify-between gap-3">
+                      <p className="text-xs text-[color:var(--text-muted)]">
+                        Install the default estimate-approval rule pack (block work lane, block work logs, overrun reason, notify approvers).
+                      </p>
+                      <button
+                        type="button"
+                        onClick={enableEstimateApprovalPack}
+                        disabled={automationSaving}
+                        className="px-3 py-1.5 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-page)] text-xs font-medium hover:bg-[color:var(--bg-surface)] disabled:opacity-50"
+                      >
+                        Install default pack
+                      </button>
+                    </div>
+                  )}
+                  {projectRules.length > 0 && (
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-sm font-medium text-[color:var(--text-muted)]">Project rules</span>
+                        <span className="text-xs text-[color:var(--text-muted)]">{projectRules.length} rule{projectRules.length !== 1 ? 's' : ''}</span>
+                      </div>
+                      <ul className="rounded-xl border border-[color:var(--border-subtle)] overflow-hidden divide-y divide-[color:var(--border-subtle)]/70">
+                        {[...projectRules].sort((a, b) => a.order - b.order).map((rule) => (
+                          <li key={rule.id} className="flex items-center justify-between gap-3 px-4 py-3 bg-[color:var(--bg-surface)]">
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-[color:var(--text-primary)] truncate">{rule.name}</p>
+                              <p className="text-[10px] text-[color:var(--text-muted)]">
+                                {rule.trigger} · {rule.mode ?? 'enforce'}
+                              </p>
+                            </div>
+                            <label className="flex items-center gap-2 text-xs text-[color:var(--text-muted)] shrink-0">
+                              <input
+                                type="checkbox"
+                                checked={rule.enabled}
+                                onChange={() => toggleRuleEnabled(rule.id)}
+                                className="rounded border-[color:var(--border-subtle)]"
+                              />
+                              Enabled
+                            </label>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={saveAutomation}
+                    disabled={automationSaving}
+                    className="px-4 py-1.5 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-page)] text-xs text-[color:var(--text-primary)] font-medium hover:bg-[color:var(--bg-surface)] disabled:opacity-50 transition"
+                  >
+                    {automationSaving ? 'Saving…' : 'Save automation settings'}
+                  </button>
                 </div>
               </div>
             )}

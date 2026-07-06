@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { FiAlertCircle, FiPlus } from 'react-icons/fi';
 import {
   PointerSensor,
   KeyboardSensor,
@@ -9,12 +10,9 @@ import {
   type DragEndEvent,
 } from '@dnd-kit/core';
 import { useAuth } from '../contexts/AuthContext';
-import { userHasPermission } from '../utils/permissions';
-import { TASK_FLOW_PERMISSIONS } from '@shared/constants/permissions';
 import { useNotifications } from '../contexts/NotificationsContext';
 import {
   issuesApi,
-  usersApi,
   projectsApi,
   sprintsApi,
   milestonesApi,
@@ -29,24 +27,30 @@ import {
   getIssueKey,
 } from '../lib/api';
 import ConfirmModal from '../components/ConfirmModal';
+import { normalizeFixVersionIds } from '../lib/issueVersions';
 import {
   parseFiltersFromSearchParams,
   buildSearchParams,
   getDefaultColumnsConfig,
-  ISSUE_TABLE_COLUMNS,
-  DEFAULT_COLUMN_ORDER,
-  DEFAULT_VISIBLE,
+  parseIssuesColumnsConfig,
   DEFAULT_STATUSES,
   DEFAULT_TYPES,
   DEFAULT_PRIORITIES,
   PARAM_CREATE,
   PARAM_PARENT,
+  applyFiltersToListParams,
+  countActiveFilters,
+  hasAnyIssueFilters,
+  DEFAULT_FILTERS,
+  resolveIssueParentId,
+  filterParentCandidates,
   type QuickFilterValue,
   type ViewModeValue,
   type SavedFilter,
 } from '../components/issues';
 import {
   QuickFiltersBar,
+  QuickFilterLabelFilters,
   IssuesToolbar,
   ActiveFilterChips,
   JqlSearchPanel,
@@ -59,11 +63,15 @@ import {
   ColumnsConfigModal,
   IssueCreateEditModal,
   BulkEditModal,
+  buildBulkUpdates,
+  type BulkFormState,
 } from '../components/issues';
 
 export default function Issues() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const { token, user } = useAuth();
+  const { showToast } = useNotifications();
   const [searchParams, setSearchParams] = useSearchParams();
   const { filters, quickFilter, viewMode, page, jql } = parseFiltersFromSearchParams(searchParams);
 
@@ -85,12 +93,19 @@ export default function Issues() {
     setSearchParams(nextParams, { replace: true });
   };
 
-  const { token, user } = useAuth();
   const { subscribeProject } = useNotifications();
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [project, setProject] = useState<Project | null>(null);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [total, setTotal] = useState(0);
+  const [totalCounts, setTotalCounts] = useState<{
+    my: number;
+    open: number;
+    all: number;
+    myOpenLabels: Array<{ label: string; count: number }>;
+    openLabels: Array<{ label: string; count: number }>;
+    allLabels: Array<{ label: string; count: number }>;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [users, setUsers] = useState<User[]>([]);
   const [modal, setModal] = useState<'create' | 'edit' | null>(null);
@@ -109,7 +124,7 @@ export default function Issues() {
     parent: '',
     milestone: '',
     customFieldValues: {} as Record<string, unknown>,
-    fixVersion: '',
+    fixVersion: [] as string[],
     affectsVersions: [] as string[],
     labels: [] as string[],
   });
@@ -119,7 +134,9 @@ export default function Issues() {
   const [saveFilterDialogOpen, setSaveFilterDialogOpen] = useState(false);
   const [saveFilterDialogName, setSaveFilterDialogName] = useState('');
   const [saveFilterName, setSaveFilterName] = useState('');
-  const [openFilterDropdown, setOpenFilterDropdown] = useState<'status' | 'type' | 'priority' | 'assignee' | 'reporter' | 'labels' | 'storyPoints' | 'project' | null>(null);
+  const [openFilterDropdown, setOpenFilterDropdown] = useState<
+    'status' | 'type' | 'priority' | 'assignee' | 'reporter' | 'labels' | 'storyPoints' | 'project' | 'sprint' | 'milestone' | 'fixVersion' | 'affectsVersions' | 'dueDate' | null
+  >(null);
   const [confirmDeleteIssue, setConfirmDeleteIssue] = useState<Issue | null>(null);
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [columnDragId, setColumnDragId] = useState<string | null>(null);
@@ -129,7 +146,7 @@ export default function Issues() {
   const [parentCandidates, setParentCandidates] = useState<Issue[]>([]);
   const [selectedIssueIds, setSelectedIssueIds] = useState<Set<string>>(new Set());
   const [bulkModal, setBulkModal] = useState<'edit' | null>(null);
-  const [bulkForm, setBulkForm] = useState<{ status?: string; assignee?: string; sprint?: string; storyPoints?: string; type?: string; priority?: string }>({});
+  const [bulkForm, setBulkForm] = useState<BulkFormState>({});
   const [bulkSubmitting, setBulkSubmitting] = useState(false);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [sprints, setSprints] = useState<Sprint[]>([]);
@@ -142,18 +159,10 @@ export default function Issues() {
   const [watchingLoadingId, setWatchingLoadingId] = useState<string | null>(null);
 
   const COLUMNS_CONFIG_KEY = `taskflow-issues-columns-${projectId ?? 'global'}`;
-  const [columnsConfig, setColumnsConfig] = useState<{ order: string[]; visible: Record<string, boolean> }>(() => {
+  const [columnsConfig, setColumnsConfig] = useState(() => {
     try {
       const raw = localStorage.getItem(COLUMNS_CONFIG_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as { order: string[]; visible: Record<string, boolean> };
-        const order = parsed.order?.length ? parsed.order : DEFAULT_COLUMN_ORDER;
-        const visible: Record<string, boolean> = { ...DEFAULT_VISIBLE };
-        ISSUE_TABLE_COLUMNS.forEach((c) => {
-          if (parsed.visible && c.id in parsed.visible) visible[c.id] = Boolean(parsed.visible[c.id]);
-        });
-        return { order, visible };
-      }
+      if (raw) return parseIssuesColumnsConfig(JSON.parse(raw) as Parameters<typeof parseIssuesColumnsConfig>[0]);
     } catch {}
     return getDefaultColumnsConfig();
   });
@@ -179,6 +188,13 @@ export default function Issues() {
     setColumnsConfig((prev) => ({ ...prev, order: newOrder }));
   };
   const resetColumns = () => setColumnsConfig(getDefaultColumnsConfig());
+
+  const setColumnWidth = (colId: string, width: number) => {
+    setColumnsConfig((prev) => ({
+      ...prev,
+      widths: { ...prev.widths, [colId]: width },
+    }));
+  };
 
   const SAVED_FILTERS_KEY = `taskflow-saved-filters-${projectId ?? 'global'}`;
   const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([]);
@@ -243,15 +259,9 @@ export default function Issues() {
     });
   }, [token, projectId, SAVED_FILTERS_KEY]);
 
-  const hasActiveFilters = Boolean(
-    filters.status.length || filters.assignee.length || filters.reporter.length ||
-    filters.type.length || filters.priority.length || filters.labels.length ||
-    filters.storyPoints.length || filters.hasStoryPoints === false || filters.hasEstimate === false || filters.hasEstimate === true
-  );
-  const activeFilterCount =
-    filters.status.length + filters.assignee.length + filters.reporter.length +
-    filters.type.length + filters.priority.length + filters.labels.length +
-    filters.storyPoints.length + (filters.hasStoryPoints === false ? 1 : 0) + (filters.hasEstimate === false ? 1 : 0) + (filters.hasEstimate === true ? 1 : 0);
+  const hasActiveFilters = hasAnyIssueFilters(filters);
+  const activeFilterCount = countActiveFilters(filters);
+  const versions = useMemo(() => project?.versions ?? [], [project]);
   const allLabels = useMemo(() => [...new Set(issues.flatMap((i) => i.labels || []))].sort(), [issues]);
   const limit = 25;
 
@@ -265,6 +275,13 @@ export default function Issues() {
 
   const useJql = Boolean(jql.trim());
 
+  const quickFilterLabelCounts = useMemo(() => {
+    if (!totalCounts) return [];
+    if (quickFilter === 'my') return totalCounts.myOpenLabels;
+    if (quickFilter === 'open') return totalCounts.openLabels;
+    return totalCounts.allLabels;
+  }, [totalCounts, quickFilter]);
+
   function buildListParams(p: { page: number }) {
     if (useJql) {
       return { token: token!, page: p.page, limit: viewMode === 'kanban' ? 200 : 20, jql };
@@ -275,25 +292,14 @@ export default function Issues() {
       token: token!,
       project: projectId!,
     };
-    if (quickFilter === 'open' || quickFilter === 'my') {
+    if ((quickFilter === 'open' || quickFilter === 'my') && !filters.status.length) {
       let closedStatuses = project?.statuses?.length
         ? project.statuses.filter((s) => isClosedStatus(s)).map((s) => s.name).filter(Boolean)
         : statusList.filter((s) => isClosedStatus({ name: String(s) }));
       if (closedStatuses.length === 0) closedStatuses = [...LEGACY_CLOSED_STATUSES];
       params.statusExclude = closedStatuses.join(',');
     }
-    else {
-      if (filters.status.length) params.status = filters.status.join(',');
-      if (filters.assignee.length) params.assignee = filters.assignee.join(',');
-      if (filters.reporter.length) params.reporter = filters.reporter.join(',');
-      if (filters.type.length) params.type = filters.type.join(',');
-      if (filters.priority.length) params.priority = filters.priority.join(',');
-      if (filters.labels.length) params.labels = filters.labels.join(',');
-      if (filters.storyPoints.length) params.storyPoints = filters.storyPoints.join(',');
-      if (filters.hasStoryPoints === false) params.hasStoryPoints = 'false';
-      if (filters.hasEstimate === false) params.hasEstimate = 'false';
-      if (filters.hasEstimate === true) params.hasEstimate = 'true';
-    }
+    applyFiltersToListParams(params, filters);
     if (quickFilter === 'my' && user?.id) params.assignee = user.id;
     return params;
   }
@@ -315,7 +321,7 @@ export default function Issues() {
 
   function applySavedFilter(sf: SavedFilter) {
     updateUrl({
-      filters: { ...sf.filters, project: filters.project } as typeof filters,
+      filters: { ...DEFAULT_FILTERS, ...sf.filters, project: filters.project },
       quickFilter: sf.quickFilter,
       jql: sf.jql,
       viewMode: sf.viewMode,
@@ -382,26 +388,21 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
   const getStatusMeta = (name: string) => project?.statuses?.find((s) => s.name === name);
 
   useEffect(() => {
-    if (!token) return;
-    const perms = user?.permissions ?? [];
-    if (userHasPermission(perms, TASK_FLOW_PERMISSIONS.AUTH.USER.LIST)) {
-      usersApi.list(1, 100, token).then((res) => {
-        if (res.success && res.data) setUsers(res.data.data);
-      });
-    } else if (projectId) {
-      projectsApi.getMembers(projectId, token).then((res) => {
-        if (res.success && res.data) {
-          const members = Array.isArray(res.data) ? res.data : [];
-          const flattened = members.map((m) => ({
-            _id: m.user._id,
-            name: m.user.name,
-            email: m.user.email,
-          }));
-          setUsers(flattened as unknown as User[]);
-        }
-      });
-    }
-  }, [token, user?.permissions, projectId]);
+    if (!token || !projectId) return;
+    projectsApi.getMembers(projectId, token).then((res) => {
+      if (res.success && res.data) {
+        const members = Array.isArray(res.data) ? res.data : [];
+        const flattened = members.map((m) => ({
+          _id: m.user._id,
+          name: m.user.name,
+          email: m.user.email,
+        }));
+        setUsers(flattened as unknown as User[]);
+      } else {
+        setUsers([]);
+      }
+    });
+  }, [token, projectId]);
 
   useEffect(() => {
     setJqlInput(jql);
@@ -426,6 +427,10 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
       } else if (useJql && !res.success) {
         setJqlError(res.message ?? 'JQL query failed');
       }
+    });
+
+    issuesApi.getQuickFilterCounts(token, projectId).then((res) => {
+      if (res.success && res.data) setTotalCounts(res.data);
     });
   }, [token, projectId, searchParams.toString(), refreshTrigger]);
 
@@ -464,7 +469,8 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
   }, [token, projectId]);
 
   useEffect(() => {
-    if (modal && token && projectId) {
+    const loadParents = (modal === 'create' || modal === 'edit' || bulkModal === 'edit') && token && projectId;
+    if (loadParents) {
       issuesApi
         .list({
           token,
@@ -473,12 +479,22 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
           limit: 200,
         })
         .then((res) => {
-          if (res.success && res.data) setParentCandidates(res.data.data);
+          if (res.success && res.data) {
+            let list = filterParentCandidates(
+              res.data.data ?? [],
+              editIssue?._id,
+              resolveIssueParentId(editIssue?.parent)
+            );
+            if (bulkModal === 'edit' && selectedIssueIds.size > 0) {
+              list = list.filter((i) => !selectedIssueIds.has(i._id));
+            }
+            setParentCandidates(list);
+          }
         });
     } else {
       setParentCandidates([]);
     }
-  }, [modal, token, projectId]);
+  }, [modal, bulkModal, token, projectId, editIssue?._id, selectedIssueIds]);
 
   async function handleToggleWatch(issueId: string) {
     if (!token) return;
@@ -507,7 +523,7 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
       parent: initialParent ?? '',
       milestone: '',
       customFieldValues: {},
-      fixVersion: '',
+      fixVersion: [] as string[],
       affectsVersions: [],
       labels: [],
     });
@@ -529,10 +545,10 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
       assignee: typeof issue.assignee === 'object' && issue.assignee ? issue.assignee._id : '',
       sprint: typeof issue.sprint === 'object' && issue.sprint ? issue.sprint._id : '',
       storyPoints: issue.storyPoints != null ? String(issue.storyPoints) : '',
-      parent: typeof issue.parent === 'object' && issue.parent ? issue.parent._id : '',
+      parent: resolveIssueParentId(issue.parent),
       milestone: typeof issue.milestone === 'object' && issue.milestone ? issue.milestone._id : '',
       customFieldValues: { ...(issue.customFieldValues ?? {}) },
-      fixVersion: issue.fixVersion ?? '',
+      fixVersion: normalizeFixVersionIds(issue.fixVersion),
       affectsVersions: issue.affectsVersions ?? [],
       labels: issue.labels ?? [],
     });
@@ -566,16 +582,8 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
 
   async function handleBulkUpdate() {
     if (!token || selectedIssueIds.size === 0) return;
-    const updates: Parameters<typeof issuesApi.bulkUpdate>[1] = {};
-    if (bulkForm.status) updates.status = bulkForm.status;
-    if (bulkForm.assignee !== undefined) updates.assignee = bulkForm.assignee === '__unassigned__' ? null : bulkForm.assignee || null;
-    if (bulkForm.sprint !== undefined) updates.sprint = bulkForm.sprint === '__backlog__' ? null : bulkForm.sprint || null;
-    if (bulkForm.storyPoints !== undefined) {
-      updates.storyPoints = bulkForm.storyPoints === '__clear__' ? null : Number(bulkForm.storyPoints);
-    }
-    if (bulkForm.type) updates.type = bulkForm.type;
-    if (bulkForm.priority) updates.priority = bulkForm.priority;
-    if (Object.keys(updates).length === 0) return;
+    const updates = buildBulkUpdates(bulkForm);
+    if (!updates) return;
     setBulkSubmitting(true);
     const res = await issuesApi.bulkUpdate(Array.from(selectedIssueIds), updates, token);
     setBulkSubmitting(false);
@@ -658,7 +666,7 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
           parent: form.parent || undefined,
           milestone: form.milestone || undefined,
           customFieldValues: Object.keys(form.customFieldValues).length ? form.customFieldValues : undefined,
-          fixVersion: form.fixVersion || undefined,
+          fixVersion: form.fixVersion.length ? form.fixVersion : undefined,
           affectsVersions: form.affectsVersions.length ? form.affectsVersions : undefined,
           labels: form.labels.length ? form.labels : undefined,
         },
@@ -678,6 +686,12 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
           setPendingFiles([]);
         }
         setModal(null);
+        showToast({
+          title: `Issue Created : ${getIssueKey(res.data)}`,
+          body: 'click to view',
+          url: `/projects/${projectId}/issues/${encodeURIComponent(getIssueKey(res.data))}`,
+          autoDismissMs: 5000,
+        });
         updateUrl({ page: 1 });
         issuesApi.list(buildListParams({ page: 1 })).then((r) => {
           if (r.success && r.data) {
@@ -701,7 +715,7 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
           parent: form.parent || null,
           milestone: form.milestone || null,
           customFieldValues: form.customFieldValues,
-          fixVersion: form.fixVersion || undefined,
+          fixVersion: form.fixVersion.length ? form.fixVersion : undefined,
           affectsVersions: form.affectsVersions.length ? form.affectsVersions : undefined,
           labels: form.labels,
         },
@@ -723,143 +737,268 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
 
   const totalPages = Math.ceil(total / limit) || 1;
 
+  const canSaveFilter = hasActiveFilters || quickFilter !== 'all' || Boolean(jql?.trim());
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden animate-fade-in">
-      <div className="flex-1 overflow-auto p-6">
-      <div className="w-full px-4 sm:px-6 lg:px-8">
-        <QuickFiltersBar
-          quickFilter={quickFilter}
-          updateUrl={updateUrl}
-          savedFilters={savedFilters}
-          savedFiltersLoading={savedFiltersLoading}
-          savedFiltersError={savedFiltersError}
-          applySavedFilter={applySavedFilter}
-          removeSavedFilter={removeSavedFilter}
-          onSavedEmptyClick={() => setFiltersOpen(true)}
-        />
 
-        <IssuesToolbar
-          viewMode={viewMode}
-          updateUrl={updateUrl}
-          hasActiveFilters={hasActiveFilters}
-          activeFilterCount={activeFilterCount}
-          useJql={useJql}
-          setFiltersOpen={setFiltersOpen}
-          setColumnsOpen={setColumnsOpen}
-          setJqlOpen={setJqlOpen}
-          setOpenFilterDropdown={setOpenFilterDropdown}
-          buildListParams={buildListParams}
-          openCreate={openCreate}
-          projectId={projectId}
-          token={token}
-          jql={jql}
-          canSaveFilter={hasActiveFilters || quickFilter !== 'all' || Boolean(jql?.trim())}
-          onSaveFilterClick={() => setSaveFilterDialogOpen(true)}
-        />
+      {/* ── Sticky page header ── */}
+      <div className="shrink-0 bg-[color:var(--bg-surface)] border-b border-[color:var(--border-subtle)]">
+        <div className="px-6 pt-4 pb-0">
 
-        <JqlSearchPanel
-          jqlOpen={jqlOpen}
-          jqlInput={jqlInput}
-          jqlError={jqlError}
-          useJql={useJql}
-          jqlHelpOpen={jqlHelpOpen}
-          setJqlInput={setJqlInput}
-          setJqlError={setJqlError}
-          setJqlHelpOpen={setJqlHelpOpen}
-          updateUrl={updateUrl}
-          projects={project ? [{ key: project.key, name: project.name }] : []}
-          onSaveAsFilter={() => setFiltersOpen(true)}
-        />
+          {/* Hero row: icon + title + stats tabs + New Issue */}
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-[color:var(--accent)]/15 border border-[color:var(--accent)]/25 flex items-center justify-center shrink-0">
+                <FiAlertCircle className="w-4.5 h-4.5 text-[color:var(--accent)]" aria-hidden />
+              </div>
+              <div>
+                <h1 className="text-lg font-bold text-[color:var(--text-primary)] leading-tight">Issues</h1>
+                <p className="text-[11px] text-[color:var(--text-muted)]">
+                  {loading ? '…' : `${total.toLocaleString()} ${total === 1 ? 'issue' : 'issues'}`}
+                </p>
+              </div>
+            </div>
 
-        <ActiveFilterChips
-          filters={filters}
-          quickFilter={quickFilter}
-          updateUrl={updateUrl}
-          users={users}
-          onOpenFilterModal={() => setFiltersOpen(true)}
-        />
+            <div className="flex items-center gap-2.5">
+              {/* Quick filter stat tabs */}
+              {totalCounts && (
+                <div className="hidden md:flex items-center gap-0.5 p-0.5 bg-[color:var(--bg-page)] border border-[color:var(--border-subtle)] rounded-xl">
+                  {([
+                    { key: 'my' as const, label: 'Mine', count: totalCounts.my },
+                    { key: 'open' as const, label: 'Open', count: totalCounts.open },
+                    { key: 'all' as const, label: 'All', count: totalCounts.all },
+                  ] as const).map(({ key, label, count }) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => updateUrl({ quickFilter: key, page: 1 })}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                        quickFilter === key
+                          ? 'bg-[color:var(--accent)] text-white shadow-sm'
+                          : 'text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]'
+                      }`}
+                    >
+                      {label}
+                      <span className={`font-bold tabular-nums ${
+                        quickFilter === key ? 'text-white/80' : 'text-[color:var(--accent)]'
+                      }`}>
+                        {count}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
 
-        <div className="space-y-4">
-        <BulkEditBar
-          selectedCount={selectedIssueIds.size}
-          setSelectedIssueIds={setSelectedIssueIds}
-          setBulkModal={setBulkModal}
-          setConfirmBulkDelete={setConfirmBulkDelete}
-        />
-        {loading ? (
-          <div className="rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] p-8 text-center text-[color:var(--text-muted)] animate-pulse">
-            Loading…
+              {/* New Issue CTA */}
+              <button
+                type="button"
+                onClick={() => openCreate()}
+                className="btn-primary btn-primary-sm shadow-lg inline-flex items-center gap-1.5 font-semibold"
+              >
+                <FiPlus className="w-3.5 h-3.5" aria-hidden />
+                New Issue
+              </button>
+            </div>
           </div>
-        ) : issues.length === 0 ? (
-          <div className="rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] p-12 text-center text-[color:var(--text-muted)]">
-            No issues match your filters.
-          </div>
-        ) : viewMode === 'table' ? (
-          <IssuesTableView
-            issues={issues}
-            projectId={projectId!}
-            project={project}
-            visibleColumnIds={visibleColumnIds}
-            selectedIssueIds={selectedIssueIds}
-            toggleSelectIssue={toggleSelectIssue}
-            toggleSelectAll={toggleSelectAll}
-            getIssueKey={getIssueKey}
-            getTypeMeta={getTypeMeta}
-            getPriorityMeta={getPriorityMeta}
-            getStatusMeta={getStatusMeta}
-            watchingStatus={watchingStatus}
-            watchingLoadingId={watchingLoadingId}
-            handleToggleWatch={handleToggleWatch}
-            openEdit={openEdit}
-            setConfirmDeleteIssue={setConfirmDeleteIssue}
-            navigate={(path) => navigate(path)}
-          />
-        ) : viewMode === 'kanban' ? (
-          <IssuesKanbanView
-            issues={issues}
-            statusList={statusList}
-            projectId={projectId!}
-            getIssueKey={getIssueKey}
-            getStatusMeta={getStatusMeta}
-            getTypeMeta={getTypeMeta}
-            getPriorityMeta={getPriorityMeta}
-            openEdit={openEdit}
-            setConfirmDeleteIssue={setConfirmDeleteIssue}
-            kanbanUpdatingId={kanbanUpdatingId}
-            kanbanError={kanbanError}
-            handleKanbanDragEnd={handleKanbanDragEnd}
-            kanbanSensors={kanbanSensors}
-            watchingStatus={watchingStatus}
-            watchingLoadingId={watchingLoadingId}
-            handleToggleWatch={handleToggleWatch}
-          />
-        ) : (
-          <IssuesListView
-            issues={issues}
-            projectId={projectId!}
-            getIssueKey={getIssueKey}
-            getTypeMeta={getTypeMeta}
-            getPriorityMeta={getPriorityMeta}
-            getStatusMeta={getStatusMeta}
-            watchingStatus={watchingStatus}
-            watchingLoadingId={watchingLoadingId}
-            handleToggleWatch={handleToggleWatch}
-            openEdit={openEdit}
-            setConfirmDeleteIssue={setConfirmDeleteIssue}
-            navigate={(path) => navigate(path)}
-          />
-        )}
 
-        {totalPages > 1 && viewMode !== 'kanban' && (
-          <IssuesPagination
-            page={page}
-            totalPages={totalPages}
-            total={total}
+          {/* Toolbar row */}
+          <IssuesToolbar
+            viewMode={viewMode}
             updateUrl={updateUrl}
+            hasActiveFilters={hasActiveFilters}
+            activeFilterCount={activeFilterCount}
+            useJql={useJql}
+            setFiltersOpen={setFiltersOpen}
+            setColumnsOpen={setColumnsOpen}
+            setJqlOpen={setJqlOpen}
+            setOpenFilterDropdown={setOpenFilterDropdown}
+            buildListParams={buildListParams}
+            projectId={projectId}
+            token={token}
+            jql={jql}
+            canSaveFilter={canSaveFilter}
+            onSaveFilterClick={() => setSaveFilterDialogOpen(true)}
+            showTitle={false}
           />
-        )}
+
+          {/* Saved filters (no quick tabs since hero has them) */}
+          <QuickFiltersBar
+            quickFilter={quickFilter}
+            updateUrl={updateUrl}
+            savedFilters={savedFilters}
+            savedFiltersLoading={savedFiltersLoading}
+            savedFiltersError={savedFiltersError}
+            applySavedFilter={applySavedFilter}
+            removeSavedFilter={removeSavedFilter}
+            onSavedEmptyClick={() => setFiltersOpen(true)}
+            totalCounts={totalCounts}
+            hideQuickTabs
+          />
+
+          {/* Active filter chips */}
+          <ActiveFilterChips
+            filters={filters}
+            quickFilter={quickFilter}
+            updateUrl={updateUrl}
+            users={users}
+            sprints={sprints}
+            milestones={milestones}
+            versions={versions}
+            onOpenFilterModal={() => setFiltersOpen(true)}
+          />
+
         </div>
       </div>
+
+      {/* ── Scrollable content ── */}
+      <div className="flex-1 overflow-auto">
+        <div className="px-6 py-4">
+
+          {!useJql && (
+            <QuickFilterLabelFilters
+              quickFilter={quickFilter}
+              labelCounts={quickFilterLabelCounts}
+              selectedLabels={filters.labels}
+              onToggleLabel={(label) => toggleFilter('labels', label)}
+              onClearLabels={() => updateUrl({ filters: { ...filters, labels: [] }, page: 1 })}
+              loading={totalCounts === null}
+            />
+          )}
+
+          <JqlSearchPanel
+            jqlOpen={jqlOpen}
+            jqlInput={jqlInput}
+            jqlError={jqlError}
+            useJql={useJql}
+            jqlHelpOpen={jqlHelpOpen}
+            setJqlInput={setJqlInput}
+            setJqlError={setJqlError}
+            setJqlHelpOpen={setJqlHelpOpen}
+            updateUrl={updateUrl}
+            projects={project ? [{ key: project.key, name: project.name }] : []}
+            onSaveAsFilter={() => setFiltersOpen(true)}
+          />
+
+          <div className="space-y-4">
+            <BulkEditBar
+              selectedCount={selectedIssueIds.size}
+              setSelectedIssueIds={setSelectedIssueIds}
+              setBulkModal={setBulkModal}
+              setConfirmBulkDelete={setConfirmBulkDelete}
+            />
+
+            {loading ? (
+              <div className="rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--bg-surface)] overflow-hidden">
+                {[...Array(8)].map((_, i) => (
+                  <div key={i} className="flex items-center gap-4 px-4 py-3 border-b border-[color:var(--border-subtle)]/50 last:border-0 animate-pulse">
+                    <div className="w-4 h-4 rounded bg-[color:var(--bg-elevated)]" />
+                    <div className="w-16 h-4 rounded-md bg-[color:var(--bg-elevated)]" />
+                    <div className="w-12 h-5 rounded-full bg-[color:var(--bg-elevated)]" />
+                    <div className="flex-1 h-4 rounded bg-[color:var(--bg-elevated)]" />
+                    <div className="w-20 h-5 rounded-full bg-[color:var(--bg-elevated)]" />
+                    <div className="w-14 h-5 rounded-full bg-[color:var(--bg-elevated)]" />
+                  </div>
+                ))}
+              </div>
+            ) : issues.length === 0 ? (
+              <div className="rounded-xl border border-[color:var(--border-subtle)] border-dashed bg-[color:var(--bg-surface)] py-16 text-center">
+                <div className="w-12 h-12 rounded-2xl bg-[color:var(--bg-elevated)] border border-[color:var(--border-subtle)] flex items-center justify-center mx-auto mb-4">
+                  <FiAlertCircle className="w-6 h-6 text-[color:var(--text-muted)]" />
+                </div>
+                <p className="text-sm font-medium text-[color:var(--text-primary)] mb-1">No issues found</p>
+                <p className="text-xs text-[color:var(--text-muted)] mb-4">
+                  {hasActiveFilters ? 'Try adjusting your filters or' : 'Get started by creating your first issue or'}{' '}
+                </p>
+                <div className="flex items-center justify-center gap-2">
+                  {hasActiveFilters && (
+                    <button
+                      type="button"
+                      onClick={() => updateUrl({ filters: DEFAULT_FILTERS, quickFilter: 'all', page: 1 })}
+                      className="px-4 py-2 rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--bg-elevated)] text-xs font-medium text-[color:var(--text-primary)] hover:border-[color:var(--border-emphasis)] transition"
+                    >
+                      Clear filters
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => openCreate()}
+                    className="btn-primary btn-primary-sm inline-flex items-center gap-1.5"
+                  >
+                    <FiPlus className="w-3.5 h-3.5" aria-hidden />
+                    New Issue
+                  </button>
+                </div>
+              </div>
+            ) : viewMode === 'table' ? (
+              <IssuesTableView
+                issues={issues}
+                projectId={projectId!}
+                project={project}
+                visibleColumnIds={visibleColumnIds}
+                columnWidths={columnsConfig.widths}
+                onColumnWidthChange={setColumnWidth}
+                selectedIssueIds={selectedIssueIds}
+                toggleSelectIssue={toggleSelectIssue}
+                toggleSelectAll={toggleSelectAll}
+                getIssueKey={getIssueKey}
+                getTypeMeta={getTypeMeta}
+                getPriorityMeta={getPriorityMeta}
+                getStatusMeta={getStatusMeta}
+                watchingStatus={watchingStatus}
+                watchingLoadingId={watchingLoadingId}
+                handleToggleWatch={handleToggleWatch}
+                openEdit={openEdit}
+                setConfirmDeleteIssue={setConfirmDeleteIssue}
+                navigate={(path) => navigate(path)}
+              />
+            ) : viewMode === 'kanban' ? (
+              <IssuesKanbanView
+                issues={issues}
+                statusList={statusList}
+                projectId={projectId!}
+                getIssueKey={getIssueKey}
+                getStatusMeta={getStatusMeta}
+                getTypeMeta={getTypeMeta}
+                getPriorityMeta={getPriorityMeta}
+                openEdit={openEdit}
+                setConfirmDeleteIssue={setConfirmDeleteIssue}
+                kanbanUpdatingId={kanbanUpdatingId}
+                kanbanError={kanbanError}
+                handleKanbanDragEnd={handleKanbanDragEnd}
+                kanbanSensors={kanbanSensors}
+                watchingStatus={watchingStatus}
+                watchingLoadingId={watchingLoadingId}
+                handleToggleWatch={handleToggleWatch}
+              />
+            ) : (
+              <IssuesListView
+                issues={issues}
+                projectId={projectId!}
+                getIssueKey={getIssueKey}
+                getTypeMeta={getTypeMeta}
+                getPriorityMeta={getPriorityMeta}
+                getStatusMeta={getStatusMeta}
+                watchingStatus={watchingStatus}
+                watchingLoadingId={watchingLoadingId}
+                handleToggleWatch={handleToggleWatch}
+                openEdit={openEdit}
+                setConfirmDeleteIssue={setConfirmDeleteIssue}
+                navigate={(path) => navigate(path)}
+              />
+            )}
+
+            {totalPages > 1 && viewMode !== 'kanban' && (
+              <IssuesPagination
+                page={page}
+                totalPages={totalPages}
+                total={total}
+                updateUrl={updateUrl}
+              />
+            )}
+          </div>
+
+        </div>
       </div>
 
       <IssuesFilterModal
@@ -883,6 +1022,9 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
         setSaveFilterName={setSaveFilterName}
         saveCurrentFilter={saveCurrentFilter}
         hasActiveFilters={hasActiveFilters}
+        sprints={sprints}
+        milestones={milestones}
+        versions={versions}
       />
 
       <ColumnsConfigModal
@@ -910,6 +1052,7 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
         statusList={statusList}
         users={users}
         parentCandidates={parentCandidates}
+        editingIssueId={editIssue?._id}
         project={project}
         getIssueKey={getIssueKey}
         milestones={milestones}
@@ -932,6 +1075,11 @@ const statusList = project?.statuses?.length ? project.statuses.map((s) => s.nam
         sprints={sprints}
         typeList={typeList}
         priorityList={priorityList}
+        milestones={milestones}
+        versions={versions}
+        labelSuggestions={allLabels}
+        parentCandidates={parentCandidates}
+        showProjectScopedFields
       />
 
       <ConfirmModal
